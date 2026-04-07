@@ -1,0 +1,42 @@
+[project]
+name = "scholar"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "huggingface-hub>=1.7.2",
+    "infini-transformer",
+    "marimo>=0.22.4",
+    "matplotlib>=3.10.8",
+    "safetensors>=0.7.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "tqdm>=4.66.5",
+    "transformers>=5.3.0",
+]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu130"
+
+[tool.uv.workspace]
+members = [
+    "infini-transformer",
+]
+
+[tool.uv.sources]
+infini-transformer = { workspace = true, editable = true }
+
+[dependency-groups]
+dev = [
+    "marimo[recommended]>=0.20.4",
+    "python-lsp-server[all]>=1.14.0",
+    "ruff>=0.15.6",
+    "zuban>=0.6.1",
+]
+
+[tool.marimo.runtime]
+watcher_on_save = "autorun"
+
+[tool.mypy]
+mypy_path = "./infini-transformer/"
