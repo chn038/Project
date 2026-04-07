@@ -168,7 +168,6 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         batch_size = x.shape[0]
 
         hid, z = self.hid_storage.getMemory()
-        z = z.view(-1, 1, 1) + 1e-6
 
         if attn_mask is not None:
             attn_mask_for_mem = attn_mask.unsqueeze(-1)
@@ -187,6 +186,10 @@ class Gemma3CompressiveMemory(torch.nn.Module):
                 ),
                 dtype=dtype,
             ).to(device)
+
+        if z is None:
+            z = torch.zeros((batch_size), dtype=dtype).to(device)
+        z = z.view(-1, 1, 1) + 1e-6
 
         q = self.proj_q(x)
         k = self.proj_k(x)
