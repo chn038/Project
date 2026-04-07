@@ -260,6 +260,30 @@ class Gemma3WithInfiniAttention:
         # Replace attention layers in-place (no decoder modification needed)
         self._replace_attention_layers()
 
+    def to(self, device):
+        """Move the wrapper and all internal states to device"""
+        # Move the original model
+        self.original_model = self.original_model.to(device)
+
+        # Move any existing memory tensors
+        for memory in self.layer_memories:
+            if memory.hidden_memory is not None:
+                memory.hidden_memory = memory.hidden_memory.to(device)
+            if memory.normalize_term is not None:
+                memory.normalize_term = memory.normalize_term.to(device)
+            if memory.pending_memory is not None:
+                memory.pending_memory = memory.pending_memory.to(device)
+            if memory.pending_norm is not None:
+                memory.pending_norm = memory.pending_norm.to(device)
+
+        return self
+
+    def cpu(self):
+        return self.to("cpu")
+
+    def cuda(self):
+        return self.to("cuda")
+
     def _extract_model_config(self):
         """Extract configuration from the original Gemma3 model"""
         # Gemma3-270m-it specific dimensions from your structure
