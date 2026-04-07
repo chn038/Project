@@ -19,14 +19,6 @@ dependencies = [
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu130"
 
-[tool.uv.workspace]
-members = [
-    "infini-transformer",
-]
-
-[tool.uv.sources]
-infini-transformer = { workspace = true, editable = true }
-
 [dependency-groups]
 dev = [
     "marimo[recommended]>=0.20.4",
@@ -37,6 +29,3 @@ dev = [
 
 [tool.marimo.runtime]
 watcher_on_save = "autorun"
-
-[tool.mypy]
-mypy_path = "./infini-transformer/"

@@ -10,7 +10,6 @@ with app.setup:
     import marimo as mo
     import torch
     from tqdm import tqdm
-    from infini_transformer import YaRNEmbeddings, InfiniTransformer, CompressiveMemory
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from matplotlib import pyplot as plt
     import math
@@ -542,45 +541,6 @@ def _(model, tokenizer):
         torch.cuda.empty_cache()
 
     plt.plot(context_sizes, correctnesses)
-    return
-
-
-@app.cell(disabled=True)
-def _():
-    embedder = YaRNEmbeddings(
-        dim=64,
-        seq_len=2048,
-        context_len=32768,
-        context_len_ext=65536,
-        dim_embedding_pct=0.5,
-        base=10000,
-        alpha=1,
-        beta=32,
-        length_scale=None,
-    )
-    tfm = InfiniTransformer(
-        dim_input=768,
-        dim_hidden=2048,
-        dim_key=64,
-        dim_value=64,
-        num_heads=8,
-        activation="ffngeglu",
-        segment_len=2048,
-        update="delta",
-        causal=True,
-        positional_embedder=embedder,
-        init_state_learnable=False,
-        dropout=0.1,
-    )
-
-    batch = torch.randn(
-        2,  # batch size
-        65536,  # sequence length
-        768,  # input dimension
-    )
-
-    output = tfm(batch)
-    print(output)
     return
 
 
