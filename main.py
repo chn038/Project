@@ -517,6 +517,9 @@ class Gemma3WithInfiniAttention:
             token_buffer = torch.cat([token_buffer, next_token], dim=1)
             generated = torch.cat([generated, next_token], dim=1)
 
+            if next_token == pad_token_id:
+                break
+
         return generated
 
 
