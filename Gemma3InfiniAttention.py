@@ -52,31 +52,45 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         num_heads,
         beta,
         eps,
-        seq_len,
         hid_storage,
     ):
         super(Gemma3CompressiveMemory, self).__init__()
         self.dim_input = dim_input
-        self.seq_len = seq_len
         self.num_heads = num_heads
         self.dim_key = dim_key
         self.dim_value = dim_value
-        self.proj_q = torch.nn.Linear(dim_input, dim_key * num_heads, bias=False)
-        self.proj_k = torch.nn.Linear(dim_input, dim_key, bias=False)
-        self.proj_v = torch.nn.Linear(dim_input, dim_value, bias=False)
-        self.proj_out = torch.nn.Linear(dim_value * num_heads, dim_hidden, bias=False)
+        self.proj_q = torch.nn.Linear(
+            dim_input, dim_key * num_heads, bias=False, dtype=torch.bfloat16
+        )
+        self.proj_k = torch.nn.Linear(
+            dim_input, dim_key, bias=False, dtype=torch.bfloat16
+        )
+        self.proj_v = torch.nn.Linear(
+            dim_input, dim_value, bias=False, dtype=torch.bfloat16
+        )
+        self.proj_out = torch.nn.Linear(
+            dim_value * num_heads, dim_hidden, bias=False, dtype=torch.bfloat16
+        )
         self.beta = beta
-        self.q_norm = torch.nn.RMSNorm(dim_key, eps=eps)
-        self.k_norm = torch.nn.RMSNorm(dim_key, eps=eps)
+        self.q_norm = torch.nn.RMSNorm(dim_key, eps=eps, dtype=torch.bfloat16)
+        self.k_norm = torch.nn.RMSNorm(dim_key, eps=eps, dtype=torch.bfloat16)
         self.act = Activation()
         self.softMax = torch.nn.Softmax(dim=3)
         self.hid_storage: Memory = hid_storage
 
+    def _rotate_half(self, x):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attn_mask: torch.Tensor | None = None,
-        position_embeddings: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_embeddings=None,
+        position_ids=None,
+        past_key_values=None,
     ):
         """
         x Must be the shape of (batch_size, input_length, dim_input)
@@ -90,14 +104,15 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         device = hidden_states.device
         dtype = hidden_states.dtype
         batch_size = hidden_states.shape[0]
+        seq_len = hidden_states.shape[1]
 
         hid, z = self.hid_storage.getMemory()
 
-        if attn_mask is not None:
-            attn_mask_for_mem = attn_mask.unsqueeze(-1)
-            attn_mask_for_cur = attn_mask[:, None, None, :].bool()
+        if attention_mask is not None:
+            attn_mask_for_mem = attention_mask[:, None, :, None]
+            attn_mask_for_cur = attention_mask[:, None, None, :].bool()
             causal_mask = torch.tril(
-                torch.ones((self.seq_len, self.seq_len), device=device)
+                torch.ones((seq_len, seq_len), device=device)
             ).bool()
             mask_for_cur = attn_mask_for_cur & causal_mask
 
@@ -105,6 +120,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             hid = torch.zeros(
                 (
                     batch_size,
+                    1,
                     self.dim_key,
                     self.dim_value,
                 ),
@@ -112,21 +128,19 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             ).to(device)
 
         if z is None:
-            z = torch.zeros((batch_size), dtype=dtype).to(device)
-        z = z.view(-1, 1, 1) + 1e-6
+            z = torch.zeros((batch_size, 1), dtype=dtype).to(device) + 1e-6
 
-        q = self.proj_q(hidden_states)
-        k = self.proj_k(hidden_states)
-        v = self.proj_v(hidden_states)
+        q = self.proj_q(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
+        k = self.proj_k(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
+        v = self.proj_v(hidden_states).view(batch_size, -1, seq_len, self.dim_value)
 
-        q_chunks = q.view((batch_size, self.num_heads, self.seq_len, self.dim_key))
-        q_norm = self.q_norm(q_chunks)
+        q_norm = self.q_norm(q)
         k_norm = self.k_norm(k)
         q_act = self.act(q_norm)
         k_act = self.act(k_norm)
 
         # update hidden memory
-        if attn_mask is not None:
+        if attention_mask is not None:
             k_act_masked = k_act * attn_mask_for_mem
             v_masked = v * attn_mask_for_mem
         else:
@@ -135,41 +149,61 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             v_masked = v
 
         v_diff = v_masked - torch.einsum(
-            "bsk, bkv -> bsv", k_act_masked, torch.div(hid, z)
+            "bhsk, bhkv -> bhsv", k_act_masked, torch.div(hid, z)
         )
-        hid_new = hid + torch.einsum("bsk, bsv -> bkv", k_act_masked, v_diff)
+        hid_new = hid + torch.einsum("bhsk, bhsv -> bhkv", k_act_masked, v_diff)
         z_new = z + torch.sum(k_act_masked, dim=2)
 
         self.hid_storage.registerMemory(hid_new, z_new)
 
+        # Do positional embeddings after updating memory
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
+            q_embed = (q_act * cos) + (self._rotate_half(q_act) * sin)
+            k_embed = (k_act * cos) + (self._rotate_half(k_act) * sin)
+            # undo the squeeze
+            k_act = k_act.view(batch_size, seq_len, self.dim_key)
+        else:
+            q_embed = q_act
+            k_embed = k_act
+
         # calculate current attention
+
+        # i == j == sseq_len, this is needed for Einstein notation
         attn_matrix = torch.einsum(
-            "bhsk, bsk -> bhss", q_chunks, k_act / math.sqrt(self.dim_key)
+            "bhik, bhjk -> bhij", q_embed, k_embed / math.sqrt(self.dim_key)
         )
-        if attn_mask is not None:
+        if attention_mask is not None:
             attn_matrix = attn_matrix.masked_fill(~mask_for_cur, -1e9)
 
         a_dot_unflatten = torch.einsum(
-            "bhss, bsv -> bhsv", self.softMax(attn_matrix), v
+            "bhss, bhsv -> bhsv", self.softMax(attn_matrix), v
         )
 
         a_dot_unflatten = torch.transpose(a_dot_unflatten, 1, 2)
         a_dot = a_dot_unflatten.reshape(
-            (batch_size, self.seq_len, self.num_heads * self.dim_value)
+            (batch_size, seq_len, self.num_heads * self.dim_value)
         )
 
         # calculate attention from memory
-        a_mem_unflatten = torch.einsum("bhsk, bkv -> bhsv", q_act, torch.div(hid, z))
+        a_mem_unflatten = torch.einsum("bhsk, bhkv -> bhsv", q_embed, torch.div(hid, z))
         a_mem_unflatten = torch.transpose(a_mem_unflatten, 1, 2)
         a_mem = a_mem_unflatten.reshape(
-            (batch_size, self.seq_len, self.num_heads * self.dim_value)
+            (batch_size, seq_len, self.num_heads * self.dim_value)
         )
 
         # get attention
         a = self.beta * a_mem + (1 - self.beta) * a_dot
 
         out = self.proj_out(a)
-        return out
+
+        # The return value should be:
+        # attention_out, attention_weight, kv cache
+        # But since I'm not writing the regular attention and have a dedicated memory system
+        # I'll just ignore those outputs
+        return out, None
 
 
 class Gemma3WithInfiniAttention(torch.nn.Module):
@@ -276,7 +310,6 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
                 num_heads=self.num_heads,
                 beta=self.beta,
                 eps=self.eps,
-                seq_len=self.segment_length,
                 hid_storage=self.layer_memories[i],
             )
 
@@ -300,7 +333,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
             memory.updateMemory()
 
     def _get_next_token(self, output, temperature, top_k, top_p, do_sample):
-        next_token_logits = output.logits[:, -1, :] / temperature
+        next_token_logits = output.last_hidden_state[:, -1, :] / temperature
         if do_sample:
             # Apply top-k then top-p filtering
             if top_k is not None:
