@@ -17,13 +17,6 @@ class Memory(torch.nn.Module):
         super(Memory, self).__init__()
         self.hidden_memory = None
         self.normalize_term = None
-        self.mode = "Training"
-        self.pending_memory = None
-        self.pending_norm = None
-
-    def updateMemory(self):
-        self.hidden_memory = self.pending_memory
-        self.normalize_term = self.pending_norm
 
     def getMemory(self):
         return (self.hidden_memory, self.normalize_term)
@@ -32,14 +25,9 @@ class Memory(torch.nn.Module):
         self.hidden_memory = None
         self.normalize_term = None
 
-    def registerMemory(self, hidden_memory, normalize_term):
+    def updateMemory(self, hidden_memory, normalize_term):
         self.pending_memory = hidden_memory
         self.pending_norm = normalize_term
-        if self.mode == "Training":
-            self.updateMemory()
-
-    def switchMode(self, mode: str):
-        self.mode = mode
 
 
 class Gemma3CompressiveMemory(torch.nn.Module):
@@ -93,9 +81,9 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         past_key_values=None,
     ):
         """
-        x Must be the shape of (batch_size, input_length, dim_input)
-        hid Must be the shape of (batch_size, dim_key, dim_key)
-        attn_mask Must be the shape of (batch_size, input_length)
+        hidden_states Must be the shape of (batch_size, input_length, dim_input)
+        attention_mask sent to the layer is already applied causal mask
+            with shape (batch_size, 1, input_length, input_length)
 
         The a_dot will apply both attention mask and causal mask, so it will use (QK)V.
         However the memory will only apply attention mask, and since it's forced to use Q(KV),
@@ -109,11 +97,12 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         hid, z = self.hid_storage.getMemory()
 
         if attention_mask is not None:
-            attn_mask_for_mem = attention_mask[:, None, :, None]
-            attn_mask_for_cur = attention_mask[:, None, None, :].bool()
             causal_mask = torch.tril(
                 torch.ones((seq_len, seq_len), device=device)
             ).bool()
+            attn_mask_for_mem = attention_mask == causal_mask
+            attn_mask_for_mem = torch.all(attn_mask_for_mem, dim=-2).unsqueeze(-1)
+            attn_mask_for_cur = attention_mask
             mask_for_cur = attn_mask_for_cur & causal_mask
 
         if hid is None:
@@ -128,7 +117,10 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             ).to(device)
 
         if z is None:
-            z = torch.zeros((batch_size, 1), dtype=dtype).to(device) + 1e-6
+            z = (
+                torch.zeros((batch_size, 1, self.dim_key), dtype=dtype).to(device)
+                + 1e-6
+            )
 
         q = self.proj_q(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
         k = self.proj_k(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
@@ -154,7 +146,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         hid_new = hid + torch.einsum("bhsk, bhsv -> bhkv", k_act_masked, v_diff)
         z_new = z + torch.sum(k_act_masked, dim=2)
 
-        self.hid_storage.registerMemory(hid_new, z_new)
+        self.hid_storage.updateMemory(hid_new, z_new)
 
         # Do positional embeddings after updating memory
         if position_embeddings is not None:
@@ -163,8 +155,6 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             sin = sin.unsqueeze(1)
             q_embed = (q_act * cos) + (self._rotate_half(q_act) * sin)
             k_embed = (k_act * cos) + (self._rotate_half(k_act) * sin)
-            # undo the squeeze
-            k_act = k_act.view(batch_size, seq_len, self.dim_key)
         else:
             q_embed = q_act
             k_embed = k_act
@@ -188,7 +178,9 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         )
 
         # calculate attention from memory
-        a_mem_unflatten = torch.einsum("bhsk, bhkv -> bhsv", q_embed, torch.div(hid, z))
+        a_mem_unflatten = torch.einsum(
+            "bhsk, bhkv -> bhsv", q_act, torch.div(hid, z.unsqueeze(-1))
+        )
         a_mem_unflatten = torch.transpose(a_mem_unflatten, 1, 2)
         a_mem = a_mem_unflatten.reshape(
             (batch_size, seq_len, self.num_heads * self.dim_value)
@@ -324,16 +316,8 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         for memory in self.layer_memories:
             memory.clearMemory()
 
-    def _switch_memory_mode(self, mode):
-        for memory in self.layer_memories:
-            memory.switchMode(mode)
-
-    def _manual_update_memory(self):
-        for memory in self.layer_memories:
-            memory.updateMemory()
-
     def _get_next_token(self, output, temperature, top_k, top_p, do_sample):
-        next_token_logits = output.last_hidden_state[:, -1, :] / temperature
+        next_token_logits = output[0][:, -1, :] / temperature
         if do_sample:
             # Apply top-k then top-p filtering
             if top_k is not None:
@@ -397,11 +381,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         3. Segment-by-segment processing
         4. Output reassembly
         """
-        # Clear memories for new sequence
         self._clear_all_memories()
-
-        self._switch_memory_mode("Training")
-
         # Segment input
         segments = self._segment_input(input_ids, attention_mask)
 
@@ -439,49 +419,97 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         pad_token_id=None,
         **kwargs,
     ):
-        """
-        Generate method with memory management
-        """
-        dtype = input_ids.dtype
-        device = input_ids.device
-        # Clear memories before generation
-        self._clear_all_memories()
-        self._switch_memory_mode("Training")
-
-        segments = self._segment_input(input_ids, attention_mask)
-
-        # only want the output from the last segment
-        for segment_input_ids, segment_attention_mask in segments:
-            output = self.original_model(
-                input_ids=segment_input_ids, attention_mask=segment_attention_mask
-            )
-
-        self._switch_memory_mode("Generating")
-
-        next_token = self._get_next_token(output, temperature, top_k, top_p, do_sample)
-
-        generated = input_ids.clone()
-        generated = torch.cat([generated, next_token], dim=1)
-        token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
-        token_buffer = torch.cat([token_buffer, next_token], dim=1)
-
-        # we already have the first output
-        for steps in range(max_length - 1):
-            output = self.original_model(token_buffer)
+        for _ in range(max_length):
+            output = self(input_ids=input_ids, attention_mask=attention_mask)
             next_token = self._get_next_token(
                 output, temperature, top_k, top_p, do_sample
             )
+            input_ids = torch.cat([input_ids, next_token], dim=1)
+            attention_mask = torch.cat(
+                [attention_mask, torch.ones((1, 1)).bool().to(self.device)], dim=1
+            )
 
-            if token_buffer.shape[1] == self.segment_length:
-                # the extra token is the next start
-                # update the memory
-                self._manual_update_memory()
-                token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
-
-            token_buffer = torch.cat([token_buffer, next_token], dim=1)
-            generated = torch.cat([generated, next_token], dim=1)
-
-            if next_token == pad_token_id:
+            if pad_token_id is not None and next_token == pad_token_id:
                 break
 
-        return generated
+        return input_ids
+
+    # def generate(
+    #     self,
+    #     input_ids,
+    #     attention_mask=None,
+    #     max_length=50,
+    #     temperature=1.0,
+    #     do_sample=False,
+    #     top_k=None,
+    #     top_p=None,
+    #     pad_token_id=None,
+    #     **kwargs,
+    # ):
+    #     """
+    #     Generate method with memory management
+    #     """
+    #     dtype = input_ids.dtype
+    #     device = input_ids.device
+    #     # Clear memories before generation
+    #     self._clear_all_memories()
+    #     self._switch_memory_mode("Training")
+    #
+    #     segments = self._segment_input(input_ids, attention_mask)
+    #
+    #     # only want the output from the last segment
+    #     for segment_input_ids, segment_attention_mask in segments:
+    #         output = self.original_model(
+    #             input_ids=segment_input_ids, attention_mask=segment_attention_mask
+    #         )
+    #
+    #     self._switch_memory_mode("Generating")
+    #
+    #     next_token = self._get_next_token(output, temperature, top_k, top_p, do_sample)
+    #
+    #     generated = input_ids.clone()
+    #     generated = torch.cat([generated, next_token], dim=1)
+    #     token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
+    #     token_buffer = torch.cat([token_buffer, next_token], dim=1)
+    #
+    #     current_pos = input_ids.shape[1]  # After initial prompt
+    #     # we already have the first output
+    #     for steps in range(max_length - 1):
+    #         # Create appropriate attention mask for the buffer
+    #         if attention_mask is not None:
+    #             # Extend attention mask or create new one for current buffer
+    #             segment_attn_mask = torch.ones(
+    #                 (1, 1, token_buffer.shape[1], token_buffer.shape[1]),
+    #                 device=device,
+    #                 dtype=torch.bool,
+    #             )
+    #         else:
+    #             segment_attn_mask = None
+    #         position_ids = torch.arange(
+    #             current_pos, current_pos + token_buffer.shape[1], device=device
+    #         ).unsqueeze(0)
+    #         output = self.original_model(
+    #             token_buffer,
+    #             position_ids=position_ids,
+    #             attention_mask=segment_attn_mask,
+    #         )
+    #         next_token = self._get_next_token(
+    #             output, temperature, top_k, top_p, do_sample
+    #         )
+    #
+    #         if token_buffer.shape[1] == self.segment_length:
+    #             # the extra token is the next start
+    #             # update the memory
+    #             self._manual_update_memory()
+    #             # update pposition_ids
+    #             current_pos += token_buffer.shape[1]
+    #
+    #             token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
+    #
+    #         token_buffer = torch.cat([token_buffer, next_token], dim=1)
+    #         generated = torch.cat([generated, next_token], dim=1)
+    #
+    #         if next_token == pad_token_id:
+    #             break
+    #
+    #     return generated

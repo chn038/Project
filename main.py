@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.22.4"
+__generated_with = "0.23.0"
 app = marimo.App()
 
 with app.setup:
@@ -53,11 +53,11 @@ def _():
 def getModelOutput(model, tokenizer, x, y, passkey: int = 9054):
     model.eval()
     prompt = getTestPrompt(x, y, passkey)
-    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-    inputs = tokenizer.apply_chat_template(
-        messages, return_tensors="pt", tokenize=True, add_generation_prompt=True
-    ).to(model.device)
-    # inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    # messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+    # inputs = tokenizer.apply_chat_template(
+    #     messages, return_tensors="pt", tokenize=True, add_generation_prompt=True
+    # ).to(model.device)
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
         generated_outputs = model.generate(
             **inputs, max_new_tokens=40, pad_token_id=tokenizer.eos_token_id
@@ -86,23 +86,20 @@ def passkeyRetrievalTask(model, tokenizer, x, y, key_length=4, test_times=100):
 
 @app.cell
 def _(tokenizer):
-    infini_attn_model = Gemma3WithInfiniAttention(0.5, 2048).to(device)
+    infini_attn_model = Gemma3WithInfiniAttention(0.1, 512).to(device)
     print(infini_attn_model)
-    _context_sizes = []
-    _correctnesses = []
-    for _i in tqdm(range(0, 1300, 10)):
-        _x = _i // 2
-        _y = _i - _x
-        _prompt = getTestPrompt(_x, _y, pow(10, 4 - 1))
-        _inputs = tokenizer(_prompt, return_tensors="pt")
-        _context_sizes.append(_inputs.input_ids.shape[1])
-        _correctness = passkeyRetrievalTask(infini_attn_model, tokenizer, _x, _y)
-        _correctnesses.append(_correctness)
-
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    plt.plot(_context_sizes, _correctnesses)
+    while True:
+        _prompt = input()
+        if _prompt == "/exit":
+            break
+        _inputs = tokenizer(_prompt, return_tensors="pt").to(infini_attn_model.device)
+        with torch.no_grad():
+            _generated_outputs = infini_attn_model.generate(
+                **_inputs, max_new_tokens=40, pad_token_id=tokenizer.eos_token_id
+            )
+        _decoded_outputs = tokenizer.decode(_generated_outputs)
+        print(_generated_outputs)
+        print(_decoded_outputs)
     return
 
 
