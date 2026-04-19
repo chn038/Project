@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.0"
+__generated_with = "0.23.1"
 app = marimo.App()
 
 with app.setup:
@@ -13,7 +13,8 @@ with app.setup:
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from matplotlib import pyplot as plt
     from Gemma3InfiniAttention import Gemma3WithInfiniAttention
-    import math
+
+    model_name = "google/gemma-3-270m-it"
 
     device = "cuda" if torch.accelerator.is_available() else "cpu"
     print(device)
@@ -41,8 +42,8 @@ def _():
 @app.cell
 def _():
     # Load model directly
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m-it")
-    model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m-it")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
     model = model.to(device)
     print(f"Model Config: {model.config}")
     print(model)
@@ -53,10 +54,6 @@ def _():
 def getModelOutput(model, tokenizer, x, y, passkey: int = 9054):
     model.eval()
     prompt = getTestPrompt(x, y, passkey)
-    # messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-    # inputs = tokenizer.apply_chat_template(
-    #     messages, return_tensors="pt", tokenize=True, add_generation_prompt=True
-    # ).to(model.device)
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
         generated_outputs = model.generate(
@@ -85,9 +82,22 @@ def passkeyRetrievalTask(model, tokenizer, x, y, key_length=4, test_times=100):
 
 
 @app.cell
-def _(tokenizer):
+def _():
     infini_attn_model = Gemma3WithInfiniAttention(0.1, 512).to(device)
     print(infini_attn_model)
+    return (infini_attn_model,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md("""
+    # The following cell is disabled for either too costy or meant for testing.
+    """)
+    return
+
+
+@app.cell(disabled=True)
+def _(infini_attn_model, tokenizer):
     while True:
         _prompt = input()
         if _prompt == "/exit":
