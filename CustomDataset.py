@@ -16,7 +16,6 @@ def getDataPath(num):
 
 class CustomDataset(torch.utils.data.IterableDataset):
     def __init__(self, data_blocks, data_path=None, data_file_count=None):
-        super.__init__()
         self.data_blocks = data_blocks
         self.block_length = len(data_blocks)
         self.data_path = data_path if data_path else DATA_PATH

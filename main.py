@@ -7,6 +7,9 @@ with app.setup:
     import random
     import marimo as mo
     import torch
+    from torch.utils.data.datapipes.iter.combinatorics import ShufflerIterDataPipe
+    from torch.utils.data.datapipes.iter import IterableWrapper
+    from torch.utils.data import DataLoader
     from tqdm import tqdm
     from transformers import (
         AutoTokenizer,
@@ -19,12 +22,19 @@ with app.setup:
     from CustomDataset import getDataPath, CustomDataset
     import pandas as pd
 
-    #    model_name = "google/gemma-3-270m-it"
-    ref_model_name = "meta-llama/Meta-Llama-3-8B"
-    model_name = "nanotron/llama3-8b-infini-attention"
+    model_name = "google/gemma-3-270m-it"
+    DATA_FILE_COUNT = 15
 
     device = "cuda" if torch.accelerator.is_available() else "cpu"
     print(device)
+
+
+@app.class_definition
+class CONFIG:
+    train_test_ratio = 0.9
+    buffer_size = int(1e4)
+    worker_count = 4
+    batch_size = 16
 
 
 @app.function
@@ -48,7 +58,9 @@ def _():
 
 @app.cell
 def _(re):
-    def getModelOutput(model, tokenizer, x, y, model_pipeline=None, passkey: int = 9054):
+    def getModelOutput(
+        model, tokenizer, x, y, model_pipeline=None, passkey: int = 9054
+    ):
         prompt = getTestPrompt(x, y, passkey)
 
         if model_pipeline is None:
@@ -93,7 +105,34 @@ def _(getModelOutput):
 
 @app.cell
 def _():
-    pass
+    data_blocks = [i for i in range(DATA_FILE_COUNT)]
+    random.shuffle(data_blocks)
+
+    def split_by_ratio(lst, ratio):
+        idx = int(len(lst) * ratio)
+        return lst[:idx], lst[idx:]
+
+    train_datablock, test_datablock = split_by_ratio(
+        data_blocks, CONFIG.train_test_ratio
+    )
+    train_dataset = CustomDataset(train_datablock)
+    test_dataset = CustomDataset(test_datablock)
+    shuffled_train_dataset = ShufflerIterDataPipe(
+        IterableWrapper(train_dataset), buffer_size=CONFIG.buffer_size
+    )
+    shuffled_test_dataset = ShufflerIterDataPipe(
+        IterableWrapper(test_dataset), buffer_size=CONFIG.buffer_size
+    )
+    train_dataloader = DataLoader(
+        shuffled_train_dataset,
+        batch_size=CONFIG.batch_size,
+        num_workers=CONFIG.worker_count,
+    )
+    test_dataloader = DataLoader(
+        shuffled_test_dataset,
+        batch_size=CONFIG.batch_size,
+        num_workers=CONFIG.worker_count,
+    )
     return
 
 
@@ -103,7 +142,7 @@ def training_step(model, tokenizer, dataloader, optimizer):
 
 
 @app.cell(disabled=True)
-def _(passkeyRetrievalTask):
+def _(passkeyRetrievalTask, ref_model_name):
     model_config = LlamaConfig.from_dict(
         {
             "model_type": "llama",
