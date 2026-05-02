@@ -6,8 +6,9 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "accelerate>=1.13.0",
+    "deepeval>=2.5.5",
     "huggingface-hub>=1.7.2",
-    "marimo>=0.22.4",
+    "llama-index>=0.9.6.post2",
     "matplotlib>=3.10.8",
     "pandas>=3.0.2",
     "safetensors>=0.7.0",
@@ -23,9 +24,6 @@ url = "https://download.pytorch.org/whl/cu130"
 [dependency-groups]
 dev = [
     "marimo[recommended]>=0.20.4",
-    "python-lsp-server[all]>=1.14.0",
-    "ruff>=0.15.6",
-    "zuban>=0.6.1",
 ]
 
 [tool.marimo.runtime]

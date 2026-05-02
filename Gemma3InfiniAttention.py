@@ -434,6 +434,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         return input_ids
 
+    # The following generate creates different pattern
     # def generate(
     #     self,
     #     input_ids,
