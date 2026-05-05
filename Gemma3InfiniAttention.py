@@ -1,6 +1,7 @@
 import math
 import torch
 from transformers import AutoModelForCausalLM
+from torch.utils.checkpoint import checkpoint
 
 
 class Activation(torch.nn.Module):
@@ -73,6 +74,24 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         return torch.cat((-x2, x1), dim=-1)
 
     def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        position_embeddings=None,
+        position_ids=None,
+        past_key_values=None,
+    ):
+        return checkpoint(
+            self._infini_attention,
+            hidden_states,
+            attention_mask,
+            position_embeddings,
+            position_ids,
+            past_key_values,
+            use_reentrant=False,
+        )
+
+    def _infini_attention(
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
@@ -502,7 +521,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
     #             # the extra token is the next start
     #             # update the memory
     #             self._manual_update_memory()
-    #             # update pposition_ids
+    #             # update position_ids
     #             current_pos += token_buffer.shape[1]
     #
     #             token_buffer = torch.empty((1, 0), dtype=dtype, device=device)

@@ -2,8 +2,8 @@ import math
 import torch
 import pandas as pd
 
-DATA_PATH = "fineweb/sample/10BT/"
-DATA_FILE_COUNT = 15
+DATA_PATH = "fineweb/tokenized/"
+DATA_FILE_COUNT = 257
 
 def getDataPath(num):
     if num >= DATA_FILE_COUNT or num < 0:
@@ -12,7 +12,6 @@ def getDataPath(num):
         )
 
     return f"{DATA_PATH}{num:03d}_00000.parquet"
-
 
 class CustomDataset(torch.utils.data.IterableDataset):
     def __init__(self, data_blocks, data_path=None, data_file_count=None):
@@ -50,6 +49,7 @@ class CustomDataset(torch.utils.data.IterableDataset):
 
         for num in data_block:
             fileName = getDataPath(num)
-            dataFrame = pd.read_parquet(fileName)["text"]
-            for data in dataFrame:
-                yield data
+            dataFrame = pd.read_parquet(fileName)
+            for data in dataFrame.itertuples(index=False):
+                tokens, attn_mask = data
+                yield torch.tensor(tokens), torch.tensor(attn_mask)
