@@ -26,3 +26,5 @@ dev = [
     "marimo[recommended]>=0.20.4",
 ]
 
+[tool.marimo.runtime]
+watcher_on_save = "autorun"

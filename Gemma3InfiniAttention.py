@@ -2,6 +2,7 @@ import math
 import torch
 from transformers import AutoModelForCausalLM
 from torch.utils.checkpoint import checkpoint
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
 
 
 class Activation(torch.nn.Module):
@@ -223,8 +224,11 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         super(Gemma3WithInfiniAttention, self).__init__()
 
         self.original_model = AutoModelForCausalLM.from_pretrained(
-            "google/gemma-3-270m-it"
-        ).model
+            "google/gemma-3-270m-it",
+            torch_dtype="auto"
+        )
+        # To save memory
+        self.original_model.lm_head = checkpoint_wrapper(self.original_model.lm_head)
         self.segment_length = segment_length
         self.beta = beta
 
@@ -306,7 +310,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
     def _replace_attention_layers(self):
         """Replace each Gemma3Attention with Gemma3CompressiveMemory and copy weights"""
 
-        for i, layer in enumerate(self.original_model.layers):
+        for i, layer in enumerate(self.original_model.model.layers):
             # Store original attention for weight copying
             original_attn = layer.self_attn
 
@@ -392,6 +396,9 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         return segments
 
+    def _compute_segment_loss(self, output_segment, target_segment, loss_fn):
+        pass
+
     def forward(self, input_ids, attention_mask=None, **kwargs):
         """
         Forward pass with:
@@ -414,7 +421,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
                 attention_mask=segment_attention_mask,
                 **kwargs,
             )
-            segment_outputs.append(outputs[0])  # Last hidden state
+            segment_outputs.append(outputs.logits)  # Last hidden state
 
         # Concatenate outputs: [B, total_seq_len, dim_hidden]
         if len(segment_outputs) == 1:
@@ -425,6 +432,27 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         # Return in standard format matching original model output
         # Most HuggingFace models return tuple: (last_hidden_state, ...)
         return (final_hidden_states,) + outputs[1:]
+
+    def computeLossForTraining(self, input_ids, attention_mask, target, loss_fn, **kwargs):
+        """
+        Compute loss within each segment, and split out lm_head to reduce memory usage
+        Thus, a full rewrite of forward logit is needed
+        """
+        self._clear_all_memories()
+        loss = torch.zeros((1,), requires_grad=True)
+        segments = self._segment_input(input_ids, attention_mask)
+        target_segments = self._segment_input(target, None)
+
+        for i in range(len(segments)):
+            segment_input_ids, segment_attention_mask = segments[i]
+            target_segment, _ = target_segments
+            output_segment = self.original_model.model(
+                input_ids=segment_input_ids,
+                attention_mask=segment_attention_mask,
+                **kwargs
+            )[0]
+            loss = loss + self._compute_segment_loss(output_segment, target_segment, loss_fn)
+        return loss
 
     def generate(
         self,

@@ -33,13 +33,13 @@ with app.setup:
 
     model_name = "google/gemma-3-270m-it"
     DATA_FILE_COUNT = 15
+    TOKENIZED_FILE_COUNT = 72
     DATA_PATH = "fineweb/sample/10BT/"
     PROCESSED_PATH = "fineweb/tokenized/"
     CHECKPOINT_PATH = "checkpoints/"
 
     device = "cuda" if torch.accelerator.is_available() else "cpu"
     print(device)
-    torch.set_float32_matmul_precision('high')
 
 
 @app.class_definition
@@ -49,7 +49,7 @@ class CONFIG:
     test_steps = 10
     epoch = 30
     buffer_size = int(1e4)
-    worker_count = 4
+    worker_count = 1
     batch_size = 1
     context_size = 16384
     beta = 0.5
@@ -128,7 +128,7 @@ def passkeyRetrievalTask(
 @app.cell
 def _(run_train_btn):
     mo.stop(not run_train_btn.value, "Press train button to run")
-    _data_blocks = list(range(DATA_FILE_COUNT))
+    _data_blocks = list(range(TOKENIZED_FILE_COUNT))
     random.shuffle(_data_blocks)
 
     def split_by_ratio(lst, ratio):
@@ -185,10 +185,8 @@ def training_step(model, dataloader, optimizer, scheduler, steps):
         labels[:, :-1] = tokens[:, 1:]
         logits = model(input_ids=tokens, attention_mask=attn_mask)
         logits = logits[0]
-        loss = cross_entropy(logits, labels)
-        step_loss = torch.sum(loss)
-        losses += step_loss.item()
-        loss_steps.append(step_loss.item())
+        loss = cross_entropy(logits.permute(0, 2, 1), labels, reduction="sum")
+        loss_steps.append(loss.item())
 
         loss.backward()
         optimizer.step()
@@ -257,8 +255,9 @@ def _(
     mo.stop(not run_train_btn.value, "Press train button to run")
     start_epoch, losses = load_checkpoint(model, optimizer, scheduler)
     epoch = start_epoch
-    # _model = model.to(device)
-    _model = model
+    _model = model.to(device)
+    # _model = model
+    _model.compile()
     while epoch < CONFIG.epoch:
         print(f"Epoch {epoch + 1}/{CONFIG.epoch}")
         loss_steps = training_step(_model, train_dataloader, optimizer, scheduler, CONFIG.train_step)
@@ -446,15 +445,16 @@ def _():
 def _(run_memory_test_btn):
     mo.stop(not run_memory_test_btn.value, "Press memory test button to run")
     _model = Gemma3WithInfiniAttention(CONFIG.beta, CONFIG.segment_length)
+    print(_model)
     _model = _model.to(device)
     _model.compile()
     _tokenizer = AutoTokenizer.from_pretrained(model_name)
-    _prompt = getTestPrompt(350, 350)
+    _prompt = getTestPrompt(200, 200)
     _model.train()
     _inputs = _tokenizer(_prompt, return_tensors="pt").to(_model.device)
-    _out = _model(**_inputs)
     print(_inputs["input_ids"].shape)
-    print(_model)
+    _out = _model(**_inputs)
+    print(_out[0].shape)
     del _model, _out, _inputs
     gc.collect()
     if device == "cuda":
@@ -472,17 +472,18 @@ def _(load_dataset):
 
 
 @app.cell(disabled=True)
-def _(infini_attn_model, tokenizer):
+def _(infini_attn_model):
     while True:
         _prompt = input()
         if _prompt == "/exit":
             break
-        _inputs = tokenizer(_prompt, return_tensors="pt").to(infini_attn_model.device)
+        _tokenizer = AutoTokenizer.from_pretrained(model_name)
+        _inputs = _tokenizer(_prompt, return_tensors="pt").to(infini_attn_model.device)
         with torch.no_grad():
             _generated_outputs = infini_attn_model.generate(
-                **_inputs, max_new_tokens=40, pad_token_id=tokenizer.eos_token_id
+                **_inputs, max_new_tokens=40, pad_token_id=_tokenizer.eos_token_id
             )
-        _decoded_outputs = tokenizer.decode(_generated_outputs)
+        _decoded_outputs = _tokenizer.decode(_generated_outputs)
         print(_generated_outputs)
         print(_decoded_outputs)
     return
