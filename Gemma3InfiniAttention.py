@@ -1,8 +1,10 @@
 import math
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, Gemma3TextConfig
 from torch.utils.checkpoint import checkpoint
-from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    checkpoint_wrapper,
+)
 
 
 class Activation(torch.nn.Module):
@@ -166,7 +168,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         hid_new = hid + torch.einsum("bhsk, bhsv -> bhkv", k_act_masked, v_diff)
         z_new = z + torch.sum(k_act_masked, dim=2)
 
-        self.hid_storage.updateMemory(hid_new, z_new)
+        self.hid_storage.updateMemory(hid_new.detach(), z_new.detach())
 
         # Do positional embeddings after updating memory
         if position_embeddings is not None:
@@ -223,13 +225,16 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         super(Gemma3WithInfiniAttention, self).__init__()
 
+        config = Gemma3TextConfig.from_pretrained("google/gemma-3-270m-it")
+        config.sliding_window = segment_length
+
         self.original_model = AutoModelForCausalLM.from_pretrained(
-            "google/gemma-3-270m-it",
-            torch_dtype="auto"
+            "google/gemma-3-270m-it", torch_dtype="auto", config=config
         )
         # To save memory
         self.original_model.lm_head = checkpoint_wrapper(self.original_model.lm_head)
         self.segment_length = segment_length
+        self.lm_head_segment_length = segment_length
         self.beta = beta
 
         # Extract model configuration from original model
@@ -396,8 +401,72 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         return segments
 
-    def _compute_segment_loss(self, output_segment, target_segment, loss_fn):
-        pass
+    @torch.compile(fullgraph=True, dynamic=False)
+    def _compute_segment_loss(
+        self,
+        segment_input_ids,
+        segment_attention_mask,
+        target_segment,
+        chunk_size,
+        **kwargs,
+    ):
+        """
+        target_segments = tensor(batch_size, seg_len, 1)[seg_count]
+
+        The loss function is implemented as cross entropy loss
+        L = -zW_i + M_global + log(S_global)
+
+        Return loss as sum
+        """
+        output_segment = self.original_model.model(
+            input_ids=segment_input_ids,
+            attention_mask=segment_attention_mask,
+            **kwargs,
+        )[0]
+
+        lm_head_weight_fp32 = self.original_model.lm_head.weight.float()
+        output_fp32 = output_segment.float()
+
+        vocab_size = lm_head_weight_fp32.shape[0]
+        target_weights_row = lm_head_weight_fp32[target_segment]
+
+        z_w_i = (output_fp32 * target_weights_row).sum(dim=-1, keepdim=True)
+
+        end_idx_f = min(chunk_size, vocab_size)
+        current_weights = lm_head_weight_fp32[0:end_idx_f]
+        segment_logits = torch.nn.functional.linear(output_fp32, current_weights)
+        global_max = torch.amax(segment_logits, dim=-1, keepdim=True)
+        shifted_segment_logits = segment_logits - global_max
+        shifted_segment_logits = torch.clamp(shifted_segment_logits, min=-100, max=100)
+        global_sum = torch.sum(torch.exp(shifted_segment_logits), dim=-1, keepdim=True)
+
+        for i in range(end_idx_f, vocab_size, chunk_size):
+            end_idx = min(i + chunk_size, vocab_size)
+            current_weights = lm_head_weight_fp32[i:end_idx]
+
+            segment_logits = torch.nn.functional.linear(output_fp32, current_weights)
+            local_max = torch.amax(segment_logits, dim=-1, keepdim=True)
+            shifted_segment_logits = segment_logits - local_max
+            shifted_segment_logits = torch.clamp(shifted_segment_logits, min=-100, max=100)
+            local_sum = torch.sum(torch.exp(shifted_segment_logits), dim=-1, keepdim=True)
+
+            next_global_max = torch.maximum(global_max, local_max)
+            next_global_sum = global_sum * torch.exp(
+                global_max - next_global_max
+            ) + local_sum * torch.exp(local_max - next_global_max)
+
+            global_max = next_global_max
+            global_sum = next_global_sum
+
+        # global_max.shape = [batch_size, segment_length, 1]
+        # global_sum.shape = [batch_size, segment_length, 1]
+        # z_w_i.shape = [batch_size, segment_length, 1]
+        log_S = torch.log(global_sum + 1e-10) + global_max
+        loss = -z_w_i + log_S
+        # we will calculate sum loss here since we have no information about sequence length
+        loss = torch.sum(loss)
+
+        return loss
 
     def forward(self, input_ids, attention_mask=None, **kwargs):
         """
@@ -433,26 +502,82 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         # Most HuggingFace models return tuple: (last_hidden_state, ...)
         return (final_hidden_states,) + outputs[1:]
 
-    def computeLossForTraining(self, input_ids, attention_mask, target, loss_fn, **kwargs):
+    def computeLossForTraining(
+        self,
+        input_ids,
+        attention_mask,
+        target,
+        chunk_size=None,
+        gradient_accumulation_step=1,
+        **kwargs,
+    ):
         """
-        Compute loss within each segment, and split out lm_head to reduce memory usage
-        Thus, a full rewrite of forward logit is needed
+        Compute loss within each segment, and split out lm_head to reduce memory usage.
+        Thus, a full rewrite of forward logit is needed.
+
+        Return loss as a float
         """
+        total_loss = 0.0
         self._clear_all_memories()
-        loss = torch.zeros((1,), requires_grad=True)
         segments = self._segment_input(input_ids, attention_mask)
         target_segments = self._segment_input(target, None)
 
+        if chunk_size is None:
+            chunk_size = self.segment_length
+
         for i in range(len(segments)):
             segment_input_ids, segment_attention_mask = segments[i]
-            target_segment, _ = target_segments
-            output_segment = self.original_model.model(
-                input_ids=segment_input_ids,
-                attention_mask=segment_attention_mask,
-                **kwargs
-            )[0]
-            loss = loss + self._compute_segment_loss(output_segment, target_segment, loss_fn)
-        return loss
+            target_segment, _ = target_segments[i]
+            loss = self._compute_segment_loss(
+                segment_input_ids,
+                segment_attention_mask,
+                target_segment,
+                chunk_size,
+                **kwargs,
+            )
+
+            sequence_length = input_ids.shape[-1]
+            batch_size = input_ids.shape[0]
+
+            # compute mean loss
+            loss = loss / (batch_size * sequence_length * gradient_accumulation_step)
+            loss.backward()
+
+            total_loss += loss.item()
+
+            del segment_input_ids, segment_attention_mask, loss
+
+        self._clear_all_memories()  # save memory
+        return total_loss
+
+    def computeLossForTesting(self, input_ids, attention_mask, target, chunk_size=None):
+        total_loss = 0.0
+        self._clear_all_memories()
+        segments = self._segment_input(input_ids, attention_mask)
+        target_segments = self._segment_input(target, None)
+
+        if chunk_size is None:
+            chunk_size = self.segment_length
+
+        for i in range(len(segments)):
+            segment_input_ids, segment_attention_mask = segments[i]
+            target_segment, _ = target_segments[i]
+            loss = self._compute_segment_loss(
+                segment_input_ids,
+                segment_attention_mask,
+                target_segment,
+                chunk_size,
+            )
+
+            sequence_length = input_ids.shape[-1]
+            batch_size = input_ids.shape[0]
+
+            # compute mean loss
+            loss = loss / (batch_size * sequence_length)
+            total_loss += loss.item()
+
+        self._clear_all_memories()  # save memory
+        return total_loss
 
     def generate(
         self,

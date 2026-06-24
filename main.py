@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.23.1"
-app = marimo.App()
+app = marimo.App(width="full")
 
 with app.setup:
     import glob
@@ -39,6 +39,10 @@ with app.setup:
     CHECKPOINT_PATH = "checkpoints/"
 
     device = "cuda" if torch.accelerator.is_available() else "cpu"
+    torch._inductor.config.max_autotune_gemm = False
+    torch._dynamo.config.skip_fwd_side_effects_in_bwd_under_checkpoint = True
+    torch.set_float32_matmul_precision('high')
+    torch.multiprocessing.set_sharing_strategy("file_system")
     print(device)
 
 
@@ -53,9 +57,11 @@ class CONFIG:
     batch_size = 1
     context_size = 16384
     beta = 0.5
-    segment_length = 512
+    segment_length = 2048
     lr = 5e-5
     warmup_step = 10000
+    gradient_accumulation_step = 4
+    chunk_size = 65536
 
 
 @app.cell
@@ -169,26 +175,35 @@ def _(run_train_btn):
     scheduler = get_linear_schedule_with_warmup(
         optimizer, CONFIG.warmup_step, CONFIG.train_step * CONFIG.epoch
     )
+    print(model)
     return model, optimizer, scheduler
 
 
 @app.function
 def training_step(model, dataloader, optimizer, scheduler, steps):
     model.train()
-    losses = 0
+    losses = 0.0
     loss_steps = []
     for step in tqdm(range(steps)):
-        tokens, attn_mask = next(dataloader)
-        tokens = tokens.to(model.device)
-        attn_mask = attn_mask.to(model.device)
-        labels = tokens.clone()
-        labels[:, :-1] = tokens[:, 1:]
-        logits = model(input_ids=tokens, attention_mask=attn_mask)
-        logits = logits[0]
-        loss = cross_entropy(logits.permute(0, 2, 1), labels, reduction="sum")
-        loss_steps.append(loss.item())
+        step_loss = 0.0
+        for _ in range(CONFIG.gradient_accumulation_step):
+            tokens, attn_mask = next(dataloader)
+            tokens = tokens.to(model.device)
+            attn_mask = attn_mask.to(model.device)
+            labels = tokens.clone()
+            labels[:, :-1] = tokens[:, 1:]
+            loss = model.computeLossForTraining(
+                tokens,
+                attn_mask,
+                labels,
+                chunk_size=CONFIG.chunk_size,
+                gradient_accumulation_step=CONFIG.gradient_accumulation_step
+            )
+            step_loss += loss
+            del tokens, attn_mask, labels, loss
 
-        loss.backward()
+        losses += step_loss
+        loss_steps.append(step_loss)
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad()
@@ -208,11 +223,13 @@ def testing_step(model, dataloader, steps):
         labels = tokens.clone()
         labels[:, :-1] = tokens[:, 1:]
         with torch.no_grad():
-            logits = model(input_ids=tokens, attention_mask=attn_mask)
-        logits = logits[0]
-        loss = cross_entropy(logits, labels)
-        loss = torch.sum(loss)
-        losses += loss.item()
+            loss = model.computeLossForTesting(
+                input_ids=tokens,
+                attention_mask=attn_mask,
+                target=labels,
+                chunk_size=CONFIG.chunk_size
+            )
+        losses += loss
 
     print(f"Test loss: {losses / steps}")
 
@@ -260,8 +277,14 @@ def _(
     _model.compile()
     while epoch < CONFIG.epoch:
         print(f"Epoch {epoch + 1}/{CONFIG.epoch}")
-        loss_steps = training_step(_model, train_dataloader, optimizer, scheduler, CONFIG.train_step)
+        loss_steps = training_step(
+            _model, train_dataloader, optimizer, scheduler, CONFIG.train_step
+        )
         losses.extend(loss_steps)
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
         testing_step(_model, test_dataloader, CONFIG.test_steps)
         torch.save(
             {
@@ -269,11 +292,13 @@ def _(
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
-                'loss': losses,
+                "loss": losses,
             },
             CHECKPOINT_PATH + f"checkpoint_epoch_{epoch}.pth",
         )
         epoch += 1
+        gc.collect()
+        torch.cuda.empty_cache()
     return
 
 
@@ -353,6 +378,7 @@ def _():
 @app.cell
 def _(run_tokenize_btn):
     mo.stop(not run_tokenize_btn.value, "Press tokenize button to run")
+
     def _getDataPath(num):
         if num >= DATA_FILE_COUNT or num < 0:
             raise ValueError(
