@@ -17,12 +17,15 @@ class Activation(torch.nn.Module):
 
 
 class Memory(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, ema_ratio=0.9):
         super(Memory, self).__init__()
         self.hidden_memory = None
         self.normalize_term = None
+        self.pending_hidden_memory = None
+        self.pending_normalize_term = None
 
     def getMemory(self):
+        # return (None, None)
         return (self.hidden_memory, self.normalize_term)
 
     def clearMemory(self):
@@ -30,8 +33,15 @@ class Memory(torch.nn.Module):
         self.normalize_term = None
 
     def updateMemory(self, hidden_memory, normalize_term):
-        self.pending_memory = hidden_memory
-        self.pending_norm = normalize_term
+        self.pending_hidden_memory = hidden_memory
+        self.pending_normalize_term = normalize_term
+
+        if self.training:
+            self.flushMemory()
+
+    def flushMemory(self):
+        self.hidden_memory = self.pending_hidden_memory
+        self.normalize_term = self.pending_normalize_term
 
 
 class Gemma3CompressiveMemory(torch.nn.Module):
@@ -42,7 +52,6 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         dim_value,
         dim_hidden,
         num_heads,
-        beta,
         eps,
         hid_storage,
     ):
@@ -63,12 +72,12 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         self.proj_out = torch.nn.Linear(
             dim_value * num_heads, dim_hidden, bias=False, dtype=torch.bfloat16
         )
-        self.beta = beta
         self.q_norm = torch.nn.RMSNorm(dim_key, eps=eps, dtype=torch.bfloat16)
         self.k_norm = torch.nn.RMSNorm(dim_key, eps=eps, dtype=torch.bfloat16)
         self.act = Activation()
         self.softMax = torch.nn.Softmax(dim=3)
         self.hid_storage: Memory = hid_storage
+        self.beta = torch.nn.Parameter(torch.zeros(num_heads))
 
     def _rotate_half(self, x):
         """Rotates half the hidden dims of the input."""
@@ -122,7 +131,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             causal_mask = torch.tril(
                 torch.ones((seq_len, seq_len), device=device)
             ).bool()
-            attn_mask_for_mem = attention_mask == causal_mask
+            attn_mask_for_mem = attention_mask & causal_mask
             attn_mask_for_mem = torch.all(attn_mask_for_mem, dim=-2).unsqueeze(-1)
             attn_mask_for_cur = attention_mask
             mask_for_cur = attn_mask_for_cur & causal_mask
@@ -139,10 +148,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             ).to(device)
 
         if z is None:
-            z = (
-                torch.zeros((batch_size, 1, self.dim_key), dtype=dtype).to(device)
-                + 1e-6
-            )
+            z = torch.ones((batch_size, 1, self.dim_key), dtype=dtype).to(device)
 
         q = self.proj_q(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
         k = self.proj_k(hidden_states).view(batch_size, -1, seq_len, self.dim_key)
@@ -162,11 +168,16 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             k_act_masked = k_act
             v_masked = v
 
-        v_diff = v_masked - torch.einsum(
-            "bhsk, bhkv -> bhsv", k_act_masked, torch.div(hid, z)
-        )
-        hid_new = hid + torch.einsum("bhsk, bhsv -> bhkv", k_act_masked, v_diff)
-        z_new = z + torch.sum(k_act_masked, dim=2)
+        v_delta_nominator = torch.einsum("bhsk, bhkv -> bhsv", k_act_masked, hid)
+        v_delta_denominator = torch.einsum("bhsk, bhk -> bhs", k_act_masked, z)
+        v_delta = v_delta_nominator / v_delta_denominator.clamp(min=1e-6).unsqueeze(-1)
+
+        v_diff = v_masked - v_delta
+        hid_diff = torch.einsum("bhsk, bhsv -> bhkv", k_act_masked, v_diff)
+        z_diff = torch.sum(k_act_masked, dim=2)
+
+        hid_new = hid + hid_diff
+        z_new = z + z_diff
 
         self.hid_storage.updateMemory(hid_new.detach(), z_new.detach())
 
@@ -195,24 +206,22 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         )
 
         a_dot_unflatten = torch.transpose(a_dot_unflatten, 1, 2)
-        a_dot = a_dot_unflatten.reshape(
-            (batch_size, seq_len, self.num_heads * self.dim_value)
-        )
 
         # calculate attention from memory
-        a_mem_unflatten = torch.einsum(
-            "bhsk, bhkv -> bhsv", q_act, torch.div(hid, z.unsqueeze(-1))
+        a_mem_nominator = torch.einsum("bhsk, bhkv -> bhsv", q_act, hid)
+        a_mem_denominator = torch.einsum("bhsk, bhk -> bhs", q_act, z)
+        a_mem_unflatten = a_mem_nominator / a_mem_denominator.clamp(min=1e-6).unsqueeze(
+            -1
         )
         a_mem_unflatten = torch.transpose(a_mem_unflatten, 1, 2)
-        a_mem = a_mem_unflatten.reshape(
-            (batch_size, seq_len, self.num_heads * self.dim_value)
-        )
 
         # get attention
-        a = self.beta * a_mem + (1 - self.beta) * a_dot
+        gate = torch.sigmoid(self.beta)
+        gate = gate.view((1, 1, self.num_heads, 1))
+        a_unflatten = gate * a_mem_unflatten + (1 - gate) * a_dot_unflatten
+        a = a_unflatten.reshape(batch_size, seq_len, self.num_heads * self.dim_value)
 
         out = self.proj_out(a)
-
         # The return value should be:
         # attention_out, attention_weight, kv cache
         # But since I'm not writing the regular attention and have a dedicated memory system
@@ -229,8 +238,9 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         config.sliding_window = segment_length
 
         self.original_model = AutoModelForCausalLM.from_pretrained(
-            "google/gemma-3-270m-it", torch_dtype="auto", config=config
+            "google/gemma-3-270m-it", dtype="auto", config=config
         )
+
         # To save memory
         self.original_model.lm_head = checkpoint_wrapper(self.original_model.lm_head)
         self.segment_length = segment_length
@@ -328,7 +338,6 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
                 dim_value=self.dim_value,
                 dim_hidden=self.dim_hidden,
                 num_heads=self.num_heads,
-                beta=self.beta,
                 eps=self.eps,
                 hid_storage=self.layer_memories[i],
             )
@@ -383,13 +392,21 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         """Segment input into chunks for processing"""
         batch_size, seq_len = input_ids.shape
 
-        # Handle short sequences
-        if seq_len <= self.segment_length:
-            return [(input_ids, attention_mask)]
+        # pad inputs
+        pad_len = (seq_len + self.segment_length - 1) // self.segment_length
+        pad_len = pad_len * self.segment_length
+        len_diff = pad_len - seq_len
+        input_ids = torch.nn.functional.pad(
+            input_ids, (0, len_diff), mode="constant", value=0
+        )
+        if attention_mask is not None:
+            attention_mask = torch.nn.functional.pad(
+                attention_mask, (0, len_diff), mode='constant', value=0
+            )
 
         # Segment long sequences
         segments = []
-        for start_idx in range(0, seq_len, self.segment_length):
+        for start_idx in range(0, pad_len, self.segment_length):
             end_idx = min(start_idx + self.segment_length, seq_len)
             segment_input_ids = input_ids[:, start_idx:end_idx]
 
@@ -401,7 +418,11 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         return segments
 
-    @torch.compile(fullgraph=True, dynamic=False)
+    def _manual_update_memory(self):
+        for mem in self.layer_memories:
+            mem.flushMemory()
+
+    @torch.compile(fullgraph=True, backend="inductor")
     def _compute_segment_loss(
         self,
         segment_input_ids,
@@ -418,37 +439,74 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         Return loss as sum
         """
+        # if hasattr(self, "original_model"):
+        #     first_layer = self.original_model.model.layers[-1].self_attn
+        #     if hasattr(first_layer, "hid_storage"):
+        #         hid, z = first_layer.hid_storage.getMemory()
+        #         if hid is not None and z is not None:
+        #             print(f"\n=== SEGMENT DEBUG [STARTING] ===")
+        #             print(
+        #                 f"  Layer -1 hid max/min: {hid.abs().max().item():.2e} / {hid.min().item():.2e}"
+        #             )
+        #             print(
+        #                 f"  Layer -1 z value range: [{z.min().item():.2e}, {z.max().item():.2e}]"
+        #             )
+        #             print(
+        #                 f"  Layer -1 avg z per head: {(z.squeeze(1).mean(dim=-1) / z.shape[-1]).item():.2e}"
+        #             )
+        #             print(
+        #                 f"  Layer -1 hid / z: {(hid / z).min().item():.2e}, {(hid / z).max().item():.2e}"
+        #             )
+        #
+        #             # Check memory utilization ratio
+        #             ratio_check = hid.abs().sum() / (z.abs().sum() + 1e-10)
+        #             print(f"  Memory activation ratio: {ratio_check.item():.2e}")
+        #
+        #             if z.max() > 1e5:
+        #                 print(
+        #                     f"⚠️ WARNING: z exceeded safe threshold ({z.max().item():.2e})"
+        #                 )
+        #             elif z.max() > 1e7:
+        #                 print(f"🔴 CRITICAL: z approaching overflow limits!")
+        #
+        #             print(f"=====================================\n")
         output_segment = self.original_model.model(
             input_ids=segment_input_ids,
             attention_mask=segment_attention_mask,
             **kwargs,
         )[0]
 
-        lm_head_weight_fp32 = self.original_model.lm_head.weight.float()
-        output_fp32 = output_segment.float()
+        lm_head_weight = self.original_model.lm_head.weight
 
-        vocab_size = lm_head_weight_fp32.shape[0]
-        target_weights_row = lm_head_weight_fp32[target_segment]
+        target_weights_row = lm_head_weight[target_segment]
 
-        z_w_i = (output_fp32 * target_weights_row).sum(dim=-1, keepdim=True)
+        z_w_i = (output_segment * target_weights_row).sum(dim=-1, keepdim=True)
 
+        vocab_size = lm_head_weight.shape[0]
         end_idx_f = min(chunk_size, vocab_size)
-        current_weights = lm_head_weight_fp32[0:end_idx_f]
-        segment_logits = torch.nn.functional.linear(output_fp32, current_weights)
-        global_max = torch.amax(segment_logits, dim=-1, keepdim=True)
-        shifted_segment_logits = segment_logits - global_max
+        current_weights = lm_head_weight[:end_idx_f]
+        segment_logits = torch.nn.functional.linear(output_segment, current_weights)
+        segment_logits_fp32 = segment_logits.contiguous().float()
+
+        global_max = torch.amax(segment_logits_fp32, dim=-1, keepdim=True)
+        shifted_segment_logits = segment_logits_fp32 - global_max
         shifted_segment_logits = torch.clamp(shifted_segment_logits, min=-100, max=100)
         global_sum = torch.sum(torch.exp(shifted_segment_logits), dim=-1, keepdim=True)
 
         for i in range(end_idx_f, vocab_size, chunk_size):
             end_idx = min(i + chunk_size, vocab_size)
-            current_weights = lm_head_weight_fp32[i:end_idx]
+            current_weights = lm_head_weight[i:end_idx]
 
-            segment_logits = torch.nn.functional.linear(output_fp32, current_weights)
-            local_max = torch.amax(segment_logits, dim=-1, keepdim=True)
-            shifted_segment_logits = segment_logits - local_max
-            shifted_segment_logits = torch.clamp(shifted_segment_logits, min=-100, max=100)
-            local_sum = torch.sum(torch.exp(shifted_segment_logits), dim=-1, keepdim=True)
+            segment_logits = torch.nn.functional.linear(output_segment, current_weights)
+            segment_logits_fp32 = segment_logits.contiguous().float()
+            local_max = torch.amax(segment_logits_fp32, dim=-1, keepdim=True)
+            shifted_segment_logits = segment_logits_fp32 - local_max
+            shifted_segment_logits = torch.clamp(
+                shifted_segment_logits, min=-100, max=100
+            )
+            local_sum = torch.sum(
+                torch.exp(shifted_segment_logits), dim=-1, keepdim=True
+            )
 
             next_global_max = torch.maximum(global_max, local_max)
             next_global_sum = global_sum * torch.exp(
@@ -461,12 +519,95 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         # global_max.shape = [batch_size, segment_length, 1]
         # global_sum.shape = [batch_size, segment_length, 1]
         # z_w_i.shape = [batch_size, segment_length, 1]
-        log_S = torch.log(global_sum + 1e-10) + global_max
-        loss = -z_w_i + log_S
+        loss = -z_w_i + torch.log(global_sum + 1e-10) + global_max
         # we will calculate sum loss here since we have no information about sequence length
         loss = torch.sum(loss)
+        # if torch.isnan(loss) or torch.isinf(loss):
+        #     print(f"  output_segment max: {output_segment.max().item()}")
+        #     print(f"  z_w_i max: {z_w_i.max().item()}")
+        #     print(f"  segment_logits max: {segment_logits.max().item()}")
+        #     print(f"  global_sum min: {global_sum.min().item()}")
+        #     raise RuntimeError("Stopped to prevent NaN propagation")
 
         return loss
+
+    def computeLossForTraining(
+        self,
+        input_ids,
+        attention_mask,
+        target,
+        gradient_accumulation_step=1,
+        chunk_size=None,
+        **kwargs,
+    ):
+        """
+        Compute loss within each segment, and split out lm_head to reduce memory usage.
+        Thus, a full rewrite of forward logit is needed.
+
+        Return loss as a float
+        """
+        total_loss = 0.0
+        self._clear_all_memories()
+        segments = self._segment_input(input_ids, attention_mask)
+        target_segments = self._segment_input(target, None)
+
+        if chunk_size is None:
+            chunk_size = self.original_model.lm_head.weight.shape[0]
+
+        for i in range(len(segments)):
+            segment_input_ids, segment_attention_mask = segments[i]
+            target_segment, _ = target_segments[i]
+            loss = self._compute_segment_loss(
+                segment_input_ids,
+                segment_attention_mask,
+                target_segment,
+                chunk_size=chunk_size,
+                **kwargs,
+            )
+
+            sequence_length = input_ids.shape[-1]
+            batch_size = input_ids.shape[0]
+
+            # compute mean loss
+            loss = loss / (batch_size * sequence_length * gradient_accumulation_step)
+            loss.backward()
+
+            total_loss += loss.item()
+
+            del segment_input_ids, segment_attention_mask, loss
+
+        self._clear_all_memories()  # save memory
+        return total_loss
+
+    def computeLossForTesting(self, input_ids, attention_mask, target, chunk_size=None):
+        total_loss = 0.0
+        self._clear_all_memories()
+        segments = self._segment_input(input_ids, attention_mask)
+        target_segments = self._segment_input(target, None)
+
+        if chunk_size is None:
+            chunk_size = self.original_model.lm_head.weight.shape[0]
+
+        for i in range(len(segments)):
+            segment_input_ids, segment_attention_mask = segments[i]
+            target_segment, _ = target_segments[i]
+            loss = self._compute_segment_loss(
+                segment_input_ids,
+                segment_attention_mask,
+                target_segment,
+                chunk_size=chunk_size,
+            )
+            self._manual_update_memory()
+
+            sequence_length = input_ids.shape[-1]
+            batch_size = input_ids.shape[0]
+
+            # compute mean loss
+            loss = loss / (batch_size * sequence_length)
+            total_loss += loss.item()
+
+        self._clear_all_memories()  # save memory
+        return total_loss
 
     def forward(self, input_ids, attention_mask=None, **kwargs):
         """
@@ -502,83 +643,6 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         # Most HuggingFace models return tuple: (last_hidden_state, ...)
         return (final_hidden_states,) + outputs[1:]
 
-    def computeLossForTraining(
-        self,
-        input_ids,
-        attention_mask,
-        target,
-        chunk_size=None,
-        gradient_accumulation_step=1,
-        **kwargs,
-    ):
-        """
-        Compute loss within each segment, and split out lm_head to reduce memory usage.
-        Thus, a full rewrite of forward logit is needed.
-
-        Return loss as a float
-        """
-        total_loss = 0.0
-        self._clear_all_memories()
-        segments = self._segment_input(input_ids, attention_mask)
-        target_segments = self._segment_input(target, None)
-
-        if chunk_size is None:
-            chunk_size = self.segment_length
-
-        for i in range(len(segments)):
-            segment_input_ids, segment_attention_mask = segments[i]
-            target_segment, _ = target_segments[i]
-            loss = self._compute_segment_loss(
-                segment_input_ids,
-                segment_attention_mask,
-                target_segment,
-                chunk_size,
-                **kwargs,
-            )
-
-            sequence_length = input_ids.shape[-1]
-            batch_size = input_ids.shape[0]
-
-            # compute mean loss
-            loss = loss / (batch_size * sequence_length * gradient_accumulation_step)
-            loss.backward()
-
-            total_loss += loss.item()
-
-            del segment_input_ids, segment_attention_mask, loss
-
-        self._clear_all_memories()  # save memory
-        return total_loss
-
-    def computeLossForTesting(self, input_ids, attention_mask, target, chunk_size=None):
-        total_loss = 0.0
-        self._clear_all_memories()
-        segments = self._segment_input(input_ids, attention_mask)
-        target_segments = self._segment_input(target, None)
-
-        if chunk_size is None:
-            chunk_size = self.segment_length
-
-        for i in range(len(segments)):
-            segment_input_ids, segment_attention_mask = segments[i]
-            target_segment, _ = target_segments[i]
-            loss = self._compute_segment_loss(
-                segment_input_ids,
-                segment_attention_mask,
-                target_segment,
-                chunk_size,
-            )
-
-            sequence_length = input_ids.shape[-1]
-            batch_size = input_ids.shape[0]
-
-            # compute mean loss
-            loss = loss / (batch_size * sequence_length)
-            total_loss += loss.item()
-
-        self._clear_all_memories()  # save memory
-        return total_loss
-
     def generate(
         self,
         input_ids,
@@ -591,98 +655,67 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         pad_token_id=None,
         **kwargs,
     ):
-        for _ in range(max_length):
-            output = self(input_ids=input_ids, attention_mask=attention_mask)
+        """
+        Generate method with memory management
+        """  
+        # forcing the model to be in eval mode to make sure memory is correct
+        self.eval()
+        # Clear memories before generation
+        self._clear_all_memories()
+
+        segments = self._segment_input(input_ids, attention_mask)
+
+        # only want the output from the last segment
+        for segment_input_ids, segment_attention_mask in segments:
+            output = self.original_model(
+                input_ids=segment_input_ids, attention_mask=segment_attention_mask
+            )
+            self._manual_update_memory()
+
+        next_token = self._get_next_token(output, temperature, top_k, top_p, do_sample)
+
+        generated = input_ids.clone()
+        generated = torch.cat([generated, next_token], dim=1)
+
+        last_segment, last_segment_attn_mask = segments[-1]
+
+        idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+        if idx[0].numel() <= 0:
+            last_segment = torch.zeros_like(last_segment)
+            last_segment_attn_mask = torch.zeros_like(last_segment_attn_mask)
+            idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+            self._manual_update_memory()
+
+        idx = tuple(i[0] for i in idx)
+        last_segment[idx] = next_token
+        last_segment_attn_mask[idx] = 1
+
+        # we already have the first output
+        for steps in range(max_length - 1):
+            output = self.original_model(
+                input_ids=last_segment,
+                attention_mask=last_segment_attn_mask
+            )
             next_token = self._get_next_token(
                 output, temperature, top_k, top_p, do_sample
             )
-            input_ids = torch.cat([input_ids, next_token], dim=1)
-            attention_mask = torch.cat(
-                [attention_mask, torch.ones((1, 1)).bool().to(self.device)], dim=1
-            )
 
-            if pad_token_id is not None and next_token == pad_token_id:
+            generated = torch.cat([generated, next_token], dim=1)
+
+            if next_token == pad_token_id:
                 break
 
-        return input_ids
+            idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+            if idx[0].numel() <= 0:
+                last_segment = torch.zeros_like(last_segment)
+                last_segment_attn_mask = torch.zeros_like(last_segment_attn_mask)
+                idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+                self._manual_update_memory()
 
-    # The following generate creates different pattern
-    # def generate(
-    #     self,
-    #     input_ids,
-    #     attention_mask=None,
-    #     max_length=50,
-    #     temperature=1.0,
-    #     do_sample=False,
-    #     top_k=None,
-    #     top_p=None,
-    #     pad_token_id=None,
-    #     **kwargs,
-    # ):
-    #     """
-    #     Generate method with memory management
-    #     """
-    #     dtype = input_ids.dtype
-    #     device = input_ids.device
-    #     # Clear memories before generation
-    #     self._clear_all_memories()
-    #     self._switch_memory_mode("Training")
-    #
-    #     segments = self._segment_input(input_ids, attention_mask)
-    #
-    #     # only want the output from the last segment
-    #     for segment_input_ids, segment_attention_mask in segments:
-    #         output = self.original_model(
-    #             input_ids=segment_input_ids, attention_mask=segment_attention_mask
-    #         )
-    #
-    #     self._switch_memory_mode("Generating")
-    #
-    #     next_token = self._get_next_token(output, temperature, top_k, top_p, do_sample)
-    #
-    #     generated = input_ids.clone()
-    #     generated = torch.cat([generated, next_token], dim=1)
-    #     token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
-    #     token_buffer = torch.cat([token_buffer, next_token], dim=1)
-    #
-    #     current_pos = input_ids.shape[1]  # After initial prompt
-    #     # we already have the first output
-    #     for steps in range(max_length - 1):
-    #         # Create appropriate attention mask for the buffer
-    #         if attention_mask is not None:
-    #             # Extend attention mask or create new one for current buffer
-    #             segment_attn_mask = torch.ones(
-    #                 (1, 1, token_buffer.shape[1], token_buffer.shape[1]),
-    #                 device=device,
-    #                 dtype=torch.bool,
-    #             )
-    #         else:
-    #             segment_attn_mask = None
-    #         position_ids = torch.arange(
-    #             current_pos, current_pos + token_buffer.shape[1], device=device
-    #         ).unsqueeze(0)
-    #         output = self.original_model(
-    #             token_buffer,
-    #             position_ids=position_ids,
-    #             attention_mask=segment_attn_mask,
-    #         )
-    #         next_token = self._get_next_token(
-    #             output, temperature, top_k, top_p, do_sample
-    #         )
-    #
-    #         if token_buffer.shape[1] == self.segment_length:
-    #             # the extra token is the next start
-    #             # update the memory
-    #             self._manual_update_memory()
-    #             # update position_ids
-    #             current_pos += token_buffer.shape[1]
-    #
-    #             token_buffer = torch.empty((1, 0), dtype=dtype, device=device)
-    #
-    #         token_buffer = torch.cat([token_buffer, next_token], dim=1)
-    #         generated = torch.cat([generated, next_token], dim=1)
-    #
-    #         if next_token == pad_token_id:
-    #             break
-    #
-    #     return generated
+            idx = tuple(i[0] for i in idx)
+            last_segment[idx] = next_token
+            last_segment_attn_mask[idx] = 1
+
+        self._clear_all_memories()
+
+        return generated

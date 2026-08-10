@@ -16,4 +16,5 @@ __marimo__/
 fineweb/
 
 # checkpoints
-checkpoint/
+checkpoints/
+imgs/

@@ -7,7 +7,7 @@
   "cells": [
     {
       "id": "setup",
-      "code_hash": "316c10c379d5c47fc7ac61819ea10762",
+      "code_hash": "1f13610e04f0b7a545a113804de2d0b4",
       "outputs": [
         {
           "type": "data",
@@ -27,13 +27,7 @@
     },
     {
       "id": "Hbol",
-      "code_hash": "14eb974eeebc47dd2c92807c4c99efaa",
-      "outputs": [],
-      "console": []
-    },
-    {
-      "id": "MJUe",
-      "code_hash": "3a5be0bfed09f715840599bef6729a42",
+      "code_hash": "ed1dde30021eda5f37a7c3fd34b70236",
       "outputs": [
         {
           "type": "data",
@@ -45,79 +39,201 @@
       "console": []
     },
     {
+      "id": "MJUe",
+      "code_hash": "a9282449846b791200daa6532e024d79",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: row;justify-content: space-between;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='MJUe-0' random-id='586c699f-d936-d134-c177-b75d6a52ed8d'><marimo-button data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Test memory&lt;/span&gt;&lt;/span&gt;&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element><marimo-ui-element object-id='MJUe-1' random-id='f5ada5f8-4adf-8743-734c-47d046f6b3cb'><marimo-button data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Re-tokenize the dataset&lt;/span&gt;&lt;/span&gt;&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element><marimo-ui-element object-id='MJUe-2' random-id='64413900-e511-9008-807f-92cd186f7fbf'><marimo-button data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Run model training&lt;/span&gt;&lt;/span&gt;&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
       "id": "vblA",
       "code_hash": "629b4573e0d60378f0e7e2ebb211fd8f",
-      "outputs": [],
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "bkHC",
       "code_hash": "6fd99392a3964ac8fd5efc15a8f29ec9",
-      "outputs": [],
-      "console": []
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The pass key is 9054. Remember it. 9054 is the pass key. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. What is the pass key? The pass key is\n",
+          "mimetype": "text/plain"
+        }
+      ]
     },
     {
       "id": "lEQa",
-      "code_hash": "a857518e5cf6d19189b1426cc5a64ee0",
-      "outputs": [],
+      "code_hash": "e468fcc3cb30578c642a9ef3eaa6eb1b",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "PKri",
-      "code_hash": "df6e24bf275cd84196aa946011199648",
-      "outputs": [],
+      "code_hash": "0a69ac81fef67603c20737b843152020",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "Xref",
-      "code_hash": "beca134c0420ffb8cf5af56977c53467",
-      "outputs": [],
+      "code_hash": "2693610ca5fb1365e348737e86f45db4",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "SFPL",
-      "code_hash": "2090122cce4dfe2e00b4bf95b95601f0",
-      "outputs": [],
+      "code_hash": "9d9b69b4934776bd30efab8955b807c0",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<pre class='text-xs'>&#x27;Press train button to run&#x27;</pre>"
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "BYtC",
-      "code_hash": "9e2a3e48b4508699ad71e6cfb8fba710",
-      "outputs": [],
+      "code_hash": "e291734c2429843e8f731e034f3b3362",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "RGSE",
-      "code_hash": "c17643ca3e4d2c21763ad91b1c75ef14",
-      "outputs": [],
+      "code_hash": "fc0241af1e5e697727953facc5d53df2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "Kclp",
-      "code_hash": "0a356431b1c40906401f2bf6168ca99d",
-      "outputs": [],
+      "code_hash": "7be95e8dbab765a197e9bd2f44d948ba",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "emfo",
-      "code_hash": "a6d8dae2dae0fa45dbc6ddbe31282cdd",
-      "outputs": [],
+      "code_hash": "7b0d12e76da337e3fa0c18c25125d0b1",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
       "console": []
     },
     {
       "id": "Hstk",
+      "code_hash": "ce10d62e97b957d00a687fafac413758",
+      "outputs": [
+        {
+          "type": "error",
+          "ename": "ancestor-stopped",
+          "evalue": "This cell wasn't run because an ancestor was stopped with `mo.stop`: ",
+          "traceback": []
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "Resuming from epoch 10 using checkpoints/checkpoint_epoch_9.pth\n==================================================\nMODEL PARAMETER DTYPES\n==================================================\n  Unique Dtypes: {'torch.bfloat16'}\n  Unique Devices: {'cpu'}\n  Sample (lm_head.weight): torch.bfloat16 on cpu\n\n==================================================\nOPTIMIZER STATE DTYPES\n==================================================\n  Unique Dtypes: {'torch.float32', 'torch.bfloat16'}\n  Unique Devices: {'cpu', 'cuda:0'}\n\n==================================================\nSCHEDULER STATE DTYPES\n==================================================\n  Keys: ['base_lrs', 'last_epoch', '_step_count', '_is_initial', '_get_lr_called_within_step', '_last_lr', 'lr_lambdas']\n  base_lrs: value=[5e-05], type=list\n  last_epoch: value=9000, type=int\n  _step_count: value=9001, type=int\n  _is_initial: value=False, type=bool\n  _get_lr_called_within_step: value=False, type=bool\n  _last_lr: value=[4.5e-05], type=list\n  lr_lambdas: value=[{}], type=list\n==================================================\nEpoch 10/30\n",
+          "mimetype": "text/plain"
+        },
+        {
+          "type": "stream",
+          "name": "stderr",
+          "text": "\r  0%|                                                                                                                                | 0/1000 [00:00<?, ?it/s]\r  0%|                                                                                                                                | 0/1000 [01:02<?, ?it/s]\n",
+          "mimetype": "text/plain"
+        },
+        {
+          "type": "stream",
+          "name": "stderr",
+          "text": "<span class=\"codehilite\"><div class=\"highlight\"><pre><span></span><span class=\"gt\">Traceback (most recent call last):</span>\n  File <span class=\"nb\">&quot;/tmp/marimo_14598/__marimo__cell_Hstk_.py&quot;</span>, line <span class=\"m\">9</span>, in <span class=\"n\">&lt;module&gt;</span>\n<span class=\"w\">    </span><span class=\"n\">loss_steps</span> <span class=\"o\">=</span> <span class=\"n\">training_step</span><span class=\"p\">(</span>\n<span class=\"w\">    </span>    <span class=\"n\">_model</span><span class=\"p\">,</span> <span class=\"n\">train_dataloader</span><span class=\"p\">,</span> <span class=\"n\">optimizer</span><span class=\"p\">,</span> <span class=\"n\">scheduler</span><span class=\"p\">,</span> <span class=\"n\">CONFIG</span><span class=\"o\">.</span><span class=\"n\">train_step</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/tmp/marimo_14598/__marimo__cell_BYtC_.py&quot;</span>, line <span class=\"m\">25</span>, in <span class=\"n\">training_step</span>\n<span class=\"w\">    </span><span class=\"n\">optimizer</span><span class=\"o\">.</span><span class=\"n\">step</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"pm\">~~~~~~~~~~~~~~^^</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/lr_scheduler.py&quot;</span>, line <span class=\"m\">166</span>, in <span class=\"n\">wrapper</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">func</span><span class=\"o\">.</span><span class=\"fm\">__get__</span><span class=\"p\">(</span><span class=\"n\">opt</span><span class=\"p\">,</span> <span class=\"n\">opt</span><span class=\"o\">.</span><span class=\"vm\">__class__</span><span class=\"p\">)(</span><span class=\"o\">*</span><span class=\"n\">args</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n<span class=\"w\">           </span><span class=\"pm\">~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/optimizer.py&quot;</span>, line <span class=\"m\">533</span>, in <span class=\"n\">wrapper</span>\n<span class=\"w\">    </span><span class=\"n\">out</span> <span class=\"o\">=</span> <span class=\"n\">func</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">args</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/optimizer.py&quot;</span>, line <span class=\"m\">81</span>, in <span class=\"n\">_use_grad</span>\n<span class=\"w\">    </span><span class=\"n\">ret</span> <span class=\"o\">=</span> <span class=\"n\">func</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">args</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/adam.py&quot;</span>, line <span class=\"m\">248</span>, in <span class=\"n\">step</span>\n<span class=\"w\">    </span><span class=\"n\">adam</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"pm\">~~~~^</span>\n<span class=\"w\">    </span>    <span class=\"n\">params_with_grad</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"pm\">^^^^^^^^^^^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"o\">...&lt;</span><span class=\"mi\">19</span> <span class=\"n\">lines</span><span class=\"o\">&gt;...</span>\n<span class=\"w\">    </span>    <span class=\"n\">decoupled_weight_decay</span><span class=\"o\">=</span><span class=\"n\">group</span><span class=\"p\">[</span><span class=\"s2\">&quot;decoupled_weight_decay&quot;</span><span class=\"p\">],</span>\n<span class=\"w\">        </span><span class=\"pm\">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"pm\">^</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/optimizer.py&quot;</span>, line <span class=\"m\">151</span>, in <span class=\"n\">maybe_fallback</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">func</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">args</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/adam.py&quot;</span>, line <span class=\"m\">971</span>, in <span class=\"n\">adam</span>\n<span class=\"w\">    </span><span class=\"n\">func</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"pm\">~~~~^</span>\n<span class=\"w\">    </span>    <span class=\"n\">params</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"pm\">^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"o\">...&lt;</span><span class=\"mi\">17</span> <span class=\"n\">lines</span><span class=\"o\">&gt;...</span>\n<span class=\"w\">    </span>    <span class=\"n\">decoupled_weight_decay</span><span class=\"o\">=</span><span class=\"n\">decoupled_weight_decay</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"pm\">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"pm\">^</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/adam.py&quot;</span>, line <span class=\"m\">627</span>, in <span class=\"n\">_multi_tensor_adam</span>\n<span class=\"w\">    </span><span class=\"n\">grouped_tensors</span> <span class=\"o\">=</span> <span class=\"n\">Optimizer</span><span class=\"o\">.</span><span class=\"n\">_group_tensors_by_device_and_dtype</span><span class=\"p\">(</span>\n<span class=\"w\">    </span>    <span class=\"p\">[</span><span class=\"n\">params</span><span class=\"p\">,</span> <span class=\"n\">grads</span><span class=\"p\">,</span> <span class=\"n\">exp_avgs</span><span class=\"p\">,</span> <span class=\"n\">exp_avg_sqs</span><span class=\"p\">,</span> <span class=\"n\">max_exp_avg_sqs</span><span class=\"p\">,</span> <span class=\"n\">state_steps</span><span class=\"p\">]</span>  <span class=\"c1\"># type: ignore[list-item]</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/optim/optimizer.py&quot;</span>, line <span class=\"m\">562</span>, in <span class=\"n\">_group_tensors_by_device_and_dtype</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">_group_tensors_by_device_and_dtype</span><span class=\"p\">(</span><span class=\"n\">tensorlistlist</span><span class=\"p\">,</span> <span class=\"n\">with_indices</span><span class=\"p\">)</span>  <span class=\"c1\"># type: ignore[return-value, arg-type]</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/utils/_contextlib.py&quot;</span>, line <span class=\"m\">124</span>, in <span class=\"n\">decorate_context</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">func</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">args</span><span class=\"p\">,</span> <span class=\"o\">**</span><span class=\"n\">kwargs</span><span class=\"p\">)</span>\n  File <span class=\"nb\">&quot;/home/herochen/code/scholar/.venv/lib/python3.14/site-packages/torch/utils/_foreach_utils.py&quot;</span>, line <span class=\"m\">47</span>, in <span class=\"n\">_group_tensors_by_device_and_dtype</span>\n<span class=\"w\">    </span><span class=\"k\">return</span> <span class=\"n\">torch</span><span class=\"o\">.</span><span class=\"n\">_C</span><span class=\"o\">.</span><span class=\"n\">_group_tensors_by_device_and_dtype</span><span class=\"p\">(</span><span class=\"n\">tensorlistlist</span><span class=\"p\">,</span> <span class=\"n\">with_indices</span><span class=\"p\">)</span>\n<span class=\"w\">           </span><span class=\"pm\">~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>\n<span class=\"gr\">RuntimeError</span>: <span class=\"n\">Tensors of the same index must be on the same device and the same dtype except `step` tensors that can be CPU and float32/64 notwithstanding</span>\n</pre></div>\n</span>",
+          "mimetype": "application/vnd.marimo+traceback"
+        }
+      ]
+    },
+    {
+      "id": "nWHF",
       "code_hash": "4906120c1732f6bf68b6f525a5720745",
       "outputs": [],
       "console": []
     },
     {
-      "id": "nWHF",
-      "code_hash": "75389db01f1d085230c55c7f98f41348",
+      "id": "iLit",
+      "code_hash": "2dc2b992c5096fcca63e2dd7a35a4d27",
       "outputs": [],
       "console": []
     },
     {
-      "id": "iLit",
+      "id": "ZHCJ",
       "code_hash": "1eec87ca85d8e4722079ed4227c199e7",
       "outputs": [
         {
@@ -130,7 +246,7 @@
       "console": []
     },
     {
-      "id": "ZHCJ",
+      "id": "ROlb",
       "code_hash": "b22e880082154ed68f214898a27abac3",
       "outputs": [
         {
@@ -143,32 +259,46 @@
       "console": []
     },
     {
-      "id": "ROlb",
-      "code_hash": "6de531e1b6b2e87b40f48dc21d8d5d3e",
-      "outputs": [],
+      "id": "qnkX",
+      "code_hash": "07c685ced635857591263f3383c5e51d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<pre class='text-xs'>&#x27;Press tokenize button to run&#x27;</pre>"
+          }
+        }
+      ],
       "console": []
     },
     {
-      "id": "qnkX",
+      "id": "TqIu",
       "code_hash": "81f391ea45b57165e50159abc6e1981b",
       "outputs": [],
       "console": []
     },
     {
-      "id": "TqIu",
-      "code_hash": "35a29a11642508a0d0cdd66977d744e4",
-      "outputs": [],
+      "id": "Vxnm",
+      "code_hash": "a9e23f9e771cac73643dcb97b44c8c33",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<pre class='text-xs'>&#x27;Press memory test button to run&#x27;</pre>"
+          }
+        }
+      ],
       "console": []
     },
     {
-      "id": "Vxnm",
+      "id": "DnEU",
       "code_hash": "a63c86a95c0df803309a20071591e506",
       "outputs": [],
       "console": []
     },
     {
-      "id": "DnEU",
-      "code_hash": "a24762a0460eb57cff88125f677a040e",
+      "id": "ulZA",
+      "code_hash": "af75a9c59bced4cff5ef153a9f68dab3",
       "outputs": [],
       "console": []
     }

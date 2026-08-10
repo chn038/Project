@@ -1,5 +1,9 @@
 import marimo
 
+"""
+This file is archived now, and will be out of sync with other script.
+"""
+
 __generated_with = "0.23.1"
 app = marimo.App(width="full")
 
@@ -30,18 +34,20 @@ with app.setup:
     from Gemma3InfiniAttention import Gemma3WithInfiniAttention
     from CustomDataset import getDataPath, CustomDataset
     import pandas as pd
+    from torch.amp import GradScaler
 
     model_name = "google/gemma-3-270m-it"
     DATA_FILE_COUNT = 15
-    TOKENIZED_FILE_COUNT = 72
+    TOKENIZED_FILE_COUNT = 43
     DATA_PATH = "fineweb/sample/10BT/"
     PROCESSED_PATH = "fineweb/tokenized/"
     CHECKPOINT_PATH = "checkpoints/"
 
     device = "cuda" if torch.accelerator.is_available() else "cpu"
+
     torch._inductor.config.max_autotune_gemm = False
     torch._dynamo.config.skip_fwd_side_effects_in_bwd_under_checkpoint = True
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.multiprocessing.set_sharing_strategy("file_system")
     print(device)
 
@@ -55,10 +61,10 @@ class CONFIG:
     buffer_size = int(1e4)
     worker_count = 1
     batch_size = 1
-    context_size = 16384
+    context_size = 32768
     beta = 0.5
-    segment_length = 2048
-    lr = 5e-5
+    segment_length = 1024
+    lr = 1e-4
     warmup_step = 10000
     gradient_accumulation_step = 4
     chunk_size = 65536
@@ -170,20 +176,27 @@ def _(run_train_btn):
 @app.cell
 def _(run_train_btn):
     mo.stop(not run_train_btn.value, "Press train button to run")
-    model = Gemma3WithInfiniAttention(CONFIG.beta, CONFIG.segment_length)
+    model = (
+        Gemma3WithInfiniAttention(CONFIG.beta, CONFIG.segment_length)
+        .to(device)
+        .to(torch.bfloat16)
+    )
     optimizer = AdamW(model.parameters(), lr=CONFIG.lr)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, CONFIG.warmup_step, CONFIG.train_step * CONFIG.epoch
     )
+    scaler = GradScaler(device=device)
     print(model)
-    return model, optimizer, scheduler
+    return model, optimizer, scaler, scheduler
 
 
 @app.function
-def training_step(model, dataloader, optimizer, scheduler, steps):
+def training_step(model, dataloader, scaler, optimizer, scheduler, steps):
     model.train()
+    optimizer.zero_grad()
     losses = 0.0
     loss_steps = []
+    last_loss = 0.0
     for step in tqdm(range(steps)):
         step_loss = 0.0
         for _ in range(CONFIG.gradient_accumulation_step):
@@ -192,23 +205,31 @@ def training_step(model, dataloader, optimizer, scheduler, steps):
             attn_mask = attn_mask.to(model.device)
             labels = tokens.clone()
             labels[:, :-1] = tokens[:, 1:]
-            loss = model.computeLossForTraining(
-                tokens,
-                attn_mask,
-                labels,
-                chunk_size=CONFIG.chunk_size,
-                gradient_accumulation_step=CONFIG.gradient_accumulation_step
-            )
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                loss = model.computeLossForTraining(
+                    tokens,
+                    attn_mask,
+                    labels,
+                    scaler=scaler,
+                    gradient_accumulation_step=CONFIG.gradient_accumulation_step,
+                    chunk_size=CONFIG.chunk_size,
+                )
             step_loss += loss
             del tokens, attn_mask, labels, loss
 
+        last_loss = step_loss
         losses += step_loss
         loss_steps.append(step_loss)
-        optimizer.step()
+        print(step_loss)
+
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
         scheduler.step()
         optimizer.zero_grad()
 
-    print(f"Training loss: {losses / steps}")
+    print(f"Training loss: AVG {losses / steps}, LAST {last_loss}")
     return loss_steps
 
 
@@ -227,7 +248,6 @@ def testing_step(model, dataloader, steps):
                 input_ids=tokens,
                 attention_mask=attn_mask,
                 target=labels,
-                chunk_size=CONFIG.chunk_size
             )
         losses += loss
 
@@ -246,18 +266,73 @@ def load_checkpoint(model, optimizer, scheduler):
         # latest_file = max(list_of_files, key=os.path.getmtime)  # Alternative
 
         # Load it
-        checkpoint = torch.load(latest_file)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        checkpoint = torch.load(latest_file, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         losses = checkpoint["loss"]
         start_epoch = checkpoint["epoch"] + 1
         print(f"Resuming from epoch {start_epoch} using {latest_file}")
+        inspect_dtypes(model, optimizer, scheduler)
     else:
         losses = []
-        start_epoch = 0
+        start_epoch = 1
         print("No checkpoint found, starting from scratch")
     return start_epoch, losses
+
+
+@app.function
+def inspect_dtypes(model, optimizer, scheduler):
+    print("=" * 50)
+    print("MODEL PARAMETER DTYPES")
+    print("=" * 50)
+    model_dtypes = set()
+    model_devices = set()
+    for name, param in model.named_parameters():
+        model_dtypes.add(str(param.dtype))
+        model_devices.add(str(param.device))
+    print(f"  Unique Dtypes: {model_dtypes}")
+    print(f"  Unique Devices: {model_devices}")
+
+    # Check one specific parameter just to be sure
+    try:
+        print(
+            f"  Sample (lm_head.weight): {model.original_model.lm_head.weight.dtype} on {model.original_model.lm_head.weight.device}"
+        )
+    except Exception:
+        pass
+
+    print("\n" + "=" * 50)
+    print("OPTIMIZER STATE DTYPES")
+    print("=" * 50)
+    opt_dtypes = set()
+    opt_devices = set()
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                opt_dtypes.add(str(v.dtype))
+                opt_devices.add(str(v.device))
+    print(
+        f"  Unique Dtypes: {opt_dtypes if opt_dtypes else 'Empty (not initialized yet)'}"
+    )
+    print(
+        f"  Unique Devices: {opt_devices if opt_devices else 'Empty (not initialized yet)'}"
+    )
+
+    if scheduler:
+        print("\n" + "=" * 50)
+        print("SCHEDULER STATE DTYPES")
+        print("=" * 50)
+        sched_state = scheduler.state_dict()
+        print(f"  Keys: {list(sched_state.keys())}")
+        for k, v in sched_state.items():
+            if isinstance(v, torch.Tensor):
+                print(f"  {k}: dtype={v.dtype}, device={v.device}")
+            else:
+                print(f"  {k}: value={v}, type={type(v).__name__}")
+
+    print("=" * 50)
+    return
 
 
 @app.cell
@@ -265,6 +340,7 @@ def _(
     model,
     optimizer,
     run_train_btn,
+    scaler,
     scheduler,
     test_dataloader,
     train_dataloader,
@@ -272,20 +348,18 @@ def _(
     mo.stop(not run_train_btn.value, "Press train button to run")
     start_epoch, losses = load_checkpoint(model, optimizer, scheduler)
     epoch = start_epoch
-    _model = model.to(device)
-    # _model = model
-    _model.compile()
-    while epoch < CONFIG.epoch:
-        print(f"Epoch {epoch + 1}/{CONFIG.epoch}")
+    model.compile()
+    while epoch < CONFIG.epoch + 1:
+        print(f"Epoch {epoch}/{CONFIG.epoch}")
         loss_steps = training_step(
-            _model, train_dataloader, optimizer, scheduler, CONFIG.train_step
+            model, train_dataloader, scaler, optimizer, scheduler, CONFIG.train_step
         )
         losses.extend(loss_steps)
 
         gc.collect()
         torch.cuda.empty_cache()
 
-        testing_step(_model, test_dataloader, CONFIG.test_steps)
+        testing_step(model, test_dataloader, CONFIG.test_steps)
         torch.save(
             {
                 "epoch": epoch,
@@ -382,7 +456,9 @@ def _(run_tokenize_btn):
     def _getDataPath(num):
         if num >= DATA_FILE_COUNT or num < 0:
             raise ValueError(
-                f"Number should be between 0 and {DATA_FILE_COUNT - 1}, get {num} instead"
+                f"Number should be between 0 and {DATA_FILE_COUNT - 1}, get {
+                    num
+                } instead"
             )
 
         return f"{DATA_PATH}{num:03d}_00000.parquet"
@@ -398,8 +474,8 @@ def _(run_tokenize_btn):
             _tok = _tokenizer(_text)
             _token = _tok["input_ids"]
             _attn_mask = _tok["attention_mask"]
-            _token.append(_tokenizer.eos_token_id)
-            _attn_mask.append(1)
+            _token = [_tokenizer.bos_token_id] + _token + [_tokenizer.eos_token_id]
+            _attn_mask = [1] + _attn_mask + [1]
             _tokens.extend(_token)
             _attn_masks.extend(_attn_mask)
 
@@ -516,4 +592,7 @@ def _(infini_attn_model):
 
 
 if __name__ == "__main__":
+    print(
+        "[Warning] This file is archived now, and will be out of sync with other script."
+    )
     app.run()
