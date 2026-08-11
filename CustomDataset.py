@@ -1,24 +1,31 @@
 import math
 import torch
 import pandas as pd
-
-DATA_PATH = "fineweb/tokenized/"
-DATA_FILE_COUNT = 257
+from const import CONST
 
 def getDataPath(num):
-    if num >= DATA_FILE_COUNT or num < 0:
+    if num >= CONST.DATA_FILE_COUNT or num < 0:
         raise ValueError(
-            f"Number should be between 0 and {DATA_FILE_COUNT - 1}, get {num} instead"
+            f"Number should be between 0 and {CONST.DATA_FILE_COUNT - 1}, get {num} instead"
         )
 
-    return f"{DATA_PATH}{num:03d}_00000.parquet"
+    return f"{CONST.DATA_PATH}{num:03d}_00000.parquet"
+
+def getProcessedDataPath(num):
+    if num >= CONST.TOKENIZED_FILE_COUNT or num < 0:
+        raise ValueError(
+            f"Number should be between 0 and {CONST.TOKENIZED_FILE_COUNT - 1}, get {num} instead"
+        )
+
+    return f"{CONST.PROCESSED_PATH}{num:03d}_00000.parquet"
+    
 
 class CustomDataset(torch.utils.data.IterableDataset):
     def __init__(self, data_blocks, data_path=None, data_file_count=None):
         self.data_blocks = data_blocks
         self.block_length = len(data_blocks)
-        self.data_path = data_path if data_path else DATA_PATH
-        self.data_file_count = data_file_count if data_file_count else DATA_FILE_COUNT
+        self.data_path = data_path if data_path else CONST.PROCESSED_PATH
+        self.data_file_count = data_file_count if data_file_count else CONST.TOKENIZED_FILE_COUNT
 
     def __iter__(self):
         """
@@ -48,7 +55,7 @@ class CustomDataset(torch.utils.data.IterableDataset):
             data_block = self.data_blocks[block_start : block_start + block_width]
 
         for num in data_block:
-            fileName = getDataPath(num)
+            fileName = getProcessedDataPath(num)
             dataFrame = pd.read_parquet(fileName)
             for data in dataFrame.itertuples(index=False):
                 tokens, attn_mask = data
