@@ -1,20 +1,19 @@
 import gc
 import random
 from itertools import cycle
+
 import torch
-from torch.utils.data.datapipes.iter.combinatorics import ShufflerIterDataPipe
-from torch.utils.data.datapipes.iter import IterableWrapper
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from torch.utils.data.datapipes.iter import IterableWrapper
+from torch.utils.data.datapipes.iter.combinatorics import ShufflerIterDataPipe
 from tqdm import tqdm
-from transformers import (
-    get_cosine_schedule_with_warmup
-)
-from Gemma3InfiniAttention import Gemma3WithInfiniAttention
-from CustomDataset import CustomDataset
+from transformers import get_cosine_schedule_with_warmup
 
 from const import CONFIG, CONST
-from utils import load_checkpoint
+from CustomDataset import CustomDataset
+from Gemma3InfiniAttention import Gemma3WithInfiniAttention
+from utils import inspect_dtypes, load_checkpoint
 
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 
@@ -123,11 +122,12 @@ def main():
     train_dataloader, test_dataloader = get_data_loaders()
 
     model = Gemma3WithInfiniAttention(CONFIG.beta, CONFIG.segment_length).to(device)
-    optimizer = AdamW(model.parameters(), lr=CONFIG.lr)
+    optimizer = AdamW(model.parameters(), lr=CONFIG.lr, betas=(0.9, 0.95), weight_decay=0.1)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, CONFIG.warmup_step, CONFIG.train_step * CONFIG.epoch
     )
     print(model)
+    inspect_dtypes(model, optimizer, scheduler)
 
     start_epoch, losses = load_checkpoint(device, model, optimizer, scheduler)
     epoch = start_epoch

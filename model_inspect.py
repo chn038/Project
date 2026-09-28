@@ -17,6 +17,7 @@ def export_loss(losses):
     loss_dataframe.to_csv("losses.csv", index=False)
     print("Loss csv exported")
 
+
 def inspect_beta(model):
     betas = []
     for layer in model.original_model.model.layers:
@@ -24,7 +25,7 @@ def inspect_beta(model):
         betas.append(torch.sigmoid(beta).mean().item())
 
     print(betas)
-    betas_df = pandas.DataFrame({'beta': betas})
+    betas_df = pandas.DataFrame({"beta": betas})
     betas_df.to_csv("beta.csv")
 
 
@@ -49,7 +50,9 @@ def inspect_memory(model, input_ids, attention_mask):
                     if hid is not None and z is not None:
                         layers_memories[i].append(hid.abs().max().item())
                         layers_z[i].append(z.abs().max().item())
-                        layers_avg[i].append(hid.abs().max().item() / z.abs().max().item())
+                        layers_avg[i].append(
+                            hid.abs().max().item() / z.abs().max().item()
+                        )
                     else:
                         layers_memories[i].append(0)
                         layers_z[i].append(1)
@@ -65,21 +68,52 @@ def inspect_memory(model, input_ids, attention_mask):
     layers_memories_T = [list(row) for row in zip(*layers_memories)]
     layers_z_T = [list(row) for row in zip(*layers_z)]
     layers_avg_T = [list(row) for row in zip(*layers_avg)]
-    memories_df = pandas.DataFrame(layers_memories_T, columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))])
-    z_df = pandas.DataFrame(layers_z_T, columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))])
-    avg_df = pandas.DataFrame(layers_avg_T, columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))])
+    memories_df = pandas.DataFrame(
+        layers_memories_T,
+        columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))],
+    )
+    z_df = pandas.DataFrame(
+        layers_z_T,
+        columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))],
+    )
+    avg_df = pandas.DataFrame(
+        layers_avg_T,
+        columns=[f"layer{i}" for i in range(len(model.original_model.model.layers))],
+    )
     memories_df.to_csv("memories.csv")
     z_df.to_csv("z.csv")
     avg_df.to_csv("avg.csv")
     print("Exported")
 
 
+def model_test(model, tokenizer):
+    model = model.to(device)
+    while True:
+        user_input = input("->")
+        if user_input == "exit()":
+            break
+        tokens = tokenizer(user_input, return_tensors="pt", add_special_tokens=True)
+        print(tokens["input_ids"].shape)
+        print("User input:", tokenizer.decode(tokens["input_ids"], skip_special_tokens=False))
+
+        input_ids = tokens["input_ids"].to(device)
+        attention_mask = tokens["attention_mask"].to(device)
+        output_tokens = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pad_token_ids=tokenizer.pad_token_id,
+        )
+        print(output_tokens)
+        output = tokenizer.decode(output_tokens, skip_special_tokens=False)
+        print(output)
+
+    return
 
 
 def main():
     print("Using device:", device)
     model = Gemma3WithInfiniAttention(CONFIG.beta, CONFIG.segment_length)
-    optimizer = AdamW(model.parameters(), lr=CONFIG.lr)
+    optimizer = AdamW(model.parameters(), lr=CONFIG.lr, betas=(0.9,0.95), weight_decay=0.1)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, CONFIG.warmup_step, CONFIG.train_step * CONFIG.epoch
     )
@@ -97,6 +131,7 @@ def main():
     print(tokens["input_ids"].shape)
 
     inspect_memory(model, tokens["input_ids"], tokens["attention_mask"])
+    model_test(model, tokenizer)
 
 
 if __name__ == "__main__":

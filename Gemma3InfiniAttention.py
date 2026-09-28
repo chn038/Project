@@ -1,15 +1,16 @@
 import math
+
 import torch
-from transformers import AutoModelForCausalLM, Gemma3TextConfig
-from torch.utils.checkpoint import checkpoint
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper,
 )
+from torch.utils.checkpoint import checkpoint
+from transformers import AutoModelForCausalLM, Gemma3TextConfig
 
 
 class Activation(torch.nn.Module):
     def __init__(self, alpha=1.0, inplace=False):
-        super(Activation, self).__init__()
+        super().__init__()
         self.elu = torch.nn.ELU(alpha, inplace)
 
     def forward(self, x):
@@ -18,7 +19,7 @@ class Activation(torch.nn.Module):
 
 class Memory(torch.nn.Module):
     def __init__(self, ema_ratio=0.9):
-        super(Memory, self).__init__()
+        super().__init__()
         self.hidden_memory = None
         self.normalize_term = None
         self.pending_hidden_memory = None
@@ -46,16 +47,9 @@ class Memory(torch.nn.Module):
 
 class Gemma3CompressiveMemory(torch.nn.Module):
     def __init__(
-        self,
-        dim_input,
-        dim_key,
-        dim_value,
-        dim_hidden,
-        num_heads,
-        eps,
-        hid_storage,
+        self, dim_input, dim_key, dim_value, dim_hidden, num_heads, eps, hid_storage
     ):
-        super(Gemma3CompressiveMemory, self).__init__()
+        super().__init__()
         self.dim_input = dim_input
         self.num_heads = num_heads
         self.dim_key = dim_key
@@ -77,7 +71,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
         self.act = Activation()
         self.softMax = torch.nn.Softmax(dim=3)
         self.hid_storage: Memory = hid_storage
-        self.beta = torch.nn.Parameter(torch.zeros(num_heads))
+        self.beta = torch.nn.Parameter(torch.zeros(num_heads, dtype=torch.bfloat16))
 
     def _rotate_half(self, x):
         """Rotates half the hidden dims of the input."""
@@ -131,10 +125,8 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             causal_mask = torch.tril(
                 torch.ones((seq_len, seq_len), device=device)
             ).bool()
-            attn_mask_for_mem = attention_mask & causal_mask
-            attn_mask_for_mem = torch.all(attn_mask_for_mem, dim=-2).unsqueeze(-1)
-            attn_mask_for_cur = attention_mask
-            mask_for_cur = attn_mask_for_cur & causal_mask
+            attn_mask = attention_mask & causal_mask
+            attn_mask = torch.all(attn_mask, dim=-2).unsqueeze(-1)
 
         if hid is None:
             hid = torch.zeros(
@@ -161,8 +153,8 @@ class Gemma3CompressiveMemory(torch.nn.Module):
 
         # update hidden memory
         if attention_mask is not None:
-            k_act_masked = k_act * attn_mask_for_mem
-            v_masked = v * attn_mask_for_mem
+            k_act_masked = k_act * attn_mask
+            v_masked = v * attn_mask
         else:
             # if no mask, just don't apply anything
             k_act_masked = k_act
@@ -187,24 +179,22 @@ class Gemma3CompressiveMemory(torch.nn.Module):
             cos = cos.unsqueeze(1)
             sin = sin.unsqueeze(1)
             q_embed = (q_act * cos) + (self._rotate_half(q_act) * sin)
-            k_embed = (k_act * cos) + (self._rotate_half(k_act) * sin)
+            k_embed = (k_act_masked * cos) + (self._rotate_half(k_act_masked) * sin)
         else:
             q_embed = q_act
-            k_embed = k_act
+            k_embed = k_act_masked
 
         # calculate current attention
+        # use similar masking as the one used in memory
 
         # i == j == sseq_len, this is needed for Einstein notation
-        attn_matrix = torch.einsum(
-            "bhik, bhjk -> bhij", q_embed, k_embed / math.sqrt(self.dim_key)
-        )
-        if attention_mask is not None:
-            attn_matrix = attn_matrix.masked_fill(~mask_for_cur, -1e9)
-
-        a_dot_unflatten = torch.einsum(
-            "bhss, bhsv -> bhsv", self.softMax(attn_matrix), v
-        )
-
+        with torch.nn.attention.sdpa_kernel(backends=[torch.nn.attention.SDPBackend.FLASH_ATTENTION]):
+            a_dot_unflatten = torch.nn.functional.scaled_dot_product_attention(
+                q_embed,
+                k_embed,
+                v_masked,
+                enable_gqa=True,
+            )
         a_dot_unflatten = torch.transpose(a_dot_unflatten, 1, 2)
 
         # calculate attention from memory
@@ -232,7 +222,7 @@ class Gemma3CompressiveMemory(torch.nn.Module):
 class Gemma3WithInfiniAttention(torch.nn.Module):
     def __init__(self, beta, segment_length=512):
 
-        super(Gemma3WithInfiniAttention, self).__init__()
+        super().__init__()
 
         config = Gemma3TextConfig.from_pretrained("google/gemma-3-270m-it")
         config.sliding_window = segment_length
@@ -390,23 +380,11 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
     def _segment_input(self, input_ids, attention_mask=None):
         """Segment input into chunks for processing"""
-        batch_size, seq_len = input_ids.shape
-
-        # pad inputs
-        pad_len = (seq_len + self.segment_length - 1) // self.segment_length
-        pad_len = pad_len * self.segment_length
-        len_diff = pad_len - seq_len
-        input_ids = torch.nn.functional.pad(
-            input_ids, (0, len_diff), mode="constant", value=0
-        )
-        if attention_mask is not None:
-            attention_mask = torch.nn.functional.pad(
-                attention_mask, (0, len_diff), mode='constant', value=0
-            )
+        _batch_size, seq_len = input_ids.shape
 
         # Segment long sequences
         segments = []
-        for start_idx in range(0, pad_len, self.segment_length):
+        for start_idx in range(0, seq_len, self.segment_length):
             end_idx = min(start_idx + self.segment_length, seq_len)
             segment_input_ids = input_ids[:, start_idx:end_idx]
 
@@ -422,7 +400,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
         for mem in self.layer_memories:
             mem.flushMemory()
 
-    @torch.compile(fullgraph=True, backend="inductor")
+    @torch.compile()
     def _compute_segment_loss(
         self,
         segment_input_ids,
@@ -657,7 +635,7 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
     ):
         """
         Generate method with memory management
-        """  
+        """
         # forcing the model to be in eval mode to make sure memory is correct
         self.eval()
         # Clear memories before generation
@@ -679,22 +657,29 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
 
         last_segment, last_segment_attn_mask = segments[-1]
 
-        idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
-        if idx[0].numel() <= 0:
-            last_segment = torch.zeros_like(last_segment)
-            last_segment_attn_mask = torch.zeros_like(last_segment_attn_mask)
-            idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+        batch_size = input_ids.shape[0]
+
+        if last_segment.shape[1] == self.segment_length:
+            last_segment = torch.empty(
+                (batch_size, 0), dtype=input_ids.dtype, device=input_ids.device
+            )
+            last_segment_attn_mask = torch.empty(
+                (batch_size, 0), dtype=input_ids.dtype, device=input_ids.device
+            )
             self._manual_update_memory()
 
-        idx = tuple(i[0] for i in idx)
-        last_segment[idx] = next_token
-        last_segment_attn_mask[idx] = 1
+        last_segment = torch.cat((last_segment, next_token), dim=1)
+        next_attn_mask = torch.ones(
+            (batch_size, 1), dtype=attention_mask.dtype, device=attention_mask.device
+        )
+        last_segment_attn_mask = torch.cat(
+            (last_segment_attn_mask, next_attn_mask), dim=1
+        )
 
         # we already have the first output
         for steps in range(max_length - 1):
             output = self.original_model(
-                input_ids=last_segment,
-                attention_mask=last_segment_attn_mask
+                input_ids=last_segment, attention_mask=last_segment_attn_mask
             )
             next_token = self._get_next_token(
                 output, temperature, top_k, top_p, do_sample
@@ -705,16 +690,24 @@ class Gemma3WithInfiniAttention(torch.nn.Module):
             if next_token == pad_token_id:
                 break
 
-            idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
-            if idx[0].numel() <= 0:
-                last_segment = torch.zeros_like(last_segment)
-                last_segment_attn_mask = torch.zeros_like(last_segment_attn_mask)
-                idx = (last_segment_attn_mask == 0).nonzero(as_tuple=True)
+            if last_segment.shape[1] == self.segment_length:
+                last_segment = torch.empty(
+                    (batch_size, 0), dtype=input_ids.dtype, device=input_ids.device
+                )
+                last_segment_attn_mask = torch.empty(
+                    (batch_size, 0), dtype=input_ids.dtype, device=input_ids.device
+                )
                 self._manual_update_memory()
 
-            idx = tuple(i[0] for i in idx)
-            last_segment[idx] = next_token
-            last_segment_attn_mask[idx] = 1
+            last_segment = torch.cat((last_segment, next_token), dim=1)
+            next_attn_mask = torch.ones(
+                (batch_size, 1),
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+            last_segment_attn_mask = torch.cat(
+                (last_segment_attn_mask, next_attn_mask), dim=1
+            )
 
         self._clear_all_memories()
 

@@ -18,8 +18,8 @@ def main():
             _tok = _tokenizer(_text)
             _token = _tok["input_ids"]
             _attn_mask = _tok["attention_mask"]
-            _token = [_tokenizer.bos_token_id] + _token + [_tokenizer.eos_token_id]
-            _attn_mask = [1] + _attn_mask + [1]
+            _token = _token + [_tokenizer.eos_token_id]
+            _attn_mask = _attn_mask + [1]
             _tokens.extend(_token)
             _attn_masks.extend(_attn_mask)
 

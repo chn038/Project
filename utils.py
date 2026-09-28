@@ -13,6 +13,7 @@ def inspect_dtypes(model, optimizer, scheduler):
     model_dtypes = set()
     model_devices = set()
     for name, param in model.named_parameters():
+        print(f"    Name: {name}, Dtype: {param.dtype}, Device: {param.device}")
         model_dtypes.add(str(param.dtype))
         model_devices.add(str(param.device))
     print(f"  Unique Dtypes: {model_dtypes}")
